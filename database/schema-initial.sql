@@ -1,15 +1,19 @@
 -- ============================================
 -- GIMNASIO V2 - SCHEMA COMPLETO
 -- Ejecutar UNA SOLA VEZ para crear estructura inicial
--- 
+--
 -- Decisiones aplicadas:
 -- ✅ Sin tabla perfiles
 -- ✅ Permisos simples (acceso completo si existe en roles_formularios)
 -- ✅ CASCADE donde corresponde (detalles, pagos, permisos)
 -- ✅ RESTRICT en referencias importantes (usuarios, productos)
+-- ✅ Columna 'activo' en usuarios y productos (soft delete)
+-- ✅ Módulo COMPRAS incluido
 -- ============================================
 
 -- Limpiar si existe (solo desarrollo)
+DROP TABLE IF EXISTS detalle_compra CASCADE;
+DROP TABLE IF EXISTS compras CASCADE;
 DROP TABLE IF EXISTS ventas_pagos CASCADE;
 DROP TABLE IF EXISTS detalle_venta CASCADE;
 DROP TABLE IF EXISTS ventas CASCADE;
@@ -31,7 +35,7 @@ DROP TABLE IF EXISTS tipos_identificacion CASCADE;
 CREATE TABLE tipos_identificacion (
     id_tipo_identificacion SERIAL PRIMARY KEY,
     nombre_tipo_identificacion VARCHAR(50) NOT NULL UNIQUE,
-    descripcion_tipo_identificacion VARCHAR(50),
+    descripcion_tipo_identificacion VARCHAR(200),
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -49,7 +53,7 @@ CREATE TABLE formularios (
     titulo_formulario VARCHAR(100) NOT NULL,
     url_formulario VARCHAR(200),
     padre_id INTEGER REFERENCES formularios(id_formulario) ON DELETE CASCADE,
-    isPadre BOOLEAN,
+    is_padre BOOLEAN DEFAULT FALSE,
     orden_formulario INTEGER DEFAULT 0,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -73,13 +77,14 @@ CREATE TABLE usuarios (
     email_usuario VARCHAR(100) UNIQUE,
     hash_password_usuario VARCHAR(255) NOT NULL,
     id_rol INTEGER NOT NULL REFERENCES roles(id_rol) ON DELETE RESTRICT,
+    activo BOOLEAN DEFAULT TRUE,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     actualizado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id_tipo_identificacion, identificacion_usuario)
 );
 
--- Índices para optimización
-CREATE INDEX idx_usuarios_email ON usuarios(email);
+-- Índices para optimización de usuarios
+CREATE INDEX idx_usuarios_email ON usuarios(email_usuario);
 CREATE INDEX idx_usuarios_rol ON usuarios(id_rol);
 CREATE INDEX idx_usuarios_activo ON usuarios(activo) WHERE activo = TRUE;
 
@@ -109,7 +114,7 @@ CREATE TABLE unidades_medida (
 CREATE TABLE productos (
     id_producto SERIAL PRIMARY KEY,
     nombre_producto VARCHAR(150) NOT NULL,
-    descripcion_producto  TEXT,
+    descripcion_producto TEXT,
     id_categoria INTEGER NOT NULL REFERENCES categorias(id_categoria) ON DELETE RESTRICT,
     id_unidad_medida INTEGER NOT NULL REFERENCES unidades_medida(id_unidad_medida) ON DELETE RESTRICT,
     precio_costo NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (precio_costo >= 0),
@@ -117,14 +122,14 @@ CREATE TABLE productos (
     stock_actual NUMERIC(12, 2) DEFAULT 0 CHECK (stock_actual >= 0),
     stock_minimo NUMERIC(12, 2) DEFAULT 0,
     stock_maximo NUMERIC(12, 2),
+    activo BOOLEAN DEFAULT TRUE,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     actualizado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Índices
+-- Índices para productos
 CREATE INDEX idx_productos_categoria ON productos(id_categoria);
-CREATE INDEX idx_productos_codigo ON productos(codigo_barras) WHERE codigo_barras IS NOT NULL;
-CREATE INDEX idx_productos_nombre ON productos(nombre);
+CREATE INDEX idx_productos_nombre ON productos(nombre_producto);
 CREATE INDEX idx_productos_activo ON productos(activo) WHERE activo = TRUE;
 
 -- ============================================
@@ -136,6 +141,7 @@ CREATE TABLE metodos_pago (
     id_metodo_pago SERIAL PRIMARY KEY,
     nombre_metodo_pago VARCHAR(50) NOT NULL UNIQUE,
     descripcion_metodo_pago TEXT,
+    activo BOOLEAN DEFAULT TRUE,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -153,7 +159,7 @@ CREATE TABLE ventas (
     observaciones TEXT,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     actualizado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (id_tipo_identificacion_usuario, identificacion_usuario) 
+    FOREIGN KEY (id_tipo_identificacion_usuario, identificacion_usuario)
         REFERENCES usuarios(id_tipo_identificacion, identificacion_usuario) ON DELETE RESTRICT
 );
 
@@ -169,9 +175,9 @@ CREATE TABLE detalle_venta (
     id_detalle_venta SERIAL PRIMARY KEY,
     id_venta INTEGER NOT NULL REFERENCES ventas(id_venta) ON DELETE CASCADE,
     id_producto INTEGER NOT NULL REFERENCES productos(id_producto) ON DELETE RESTRICT,
-    cantidad_detalle_venta NUMERIC(12, 2) NOT NULL CHECK (cantidad > 0),
-    precio_unitario NUMERIC(12, 2) NOT NULL CHECK (precio_unitario >= 0),
-    subtotal NUMERIC(12, 2) GENERATED ALWAYS AS (cantidad * precio_unitario) STORED,
+    cantidad_detalle_venta NUMERIC(12, 2) NOT NULL CHECK (cantidad_detalle_venta > 0),
+    precio_unitario_venta NUMERIC(12, 2) NOT NULL CHECK (precio_unitario_venta >= 0),
+    subtotal_venta NUMERIC(12, 2) GENERATED ALWAYS AS (cantidad_detalle_venta * precio_unitario_venta) STORED,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -192,6 +198,43 @@ CREATE TABLE ventas_pagos (
 
 CREATE INDEX idx_ventas_pagos_venta ON ventas_pagos(id_venta);
 CREATE INDEX idx_ventas_pagos_fecha ON ventas_pagos(fecha_pago DESC);
+
+-- ============================================
+-- MÓDULO: COMPRAS
+-- ============================================
+
+-- Compras de inventario
+CREATE TABLE compras (
+    id_compra SERIAL PRIMARY KEY,
+    fecha_compra TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    total NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (total >= 0),
+    observaciones TEXT,
+    id_tipo_identificacion_usuario INTEGER NOT NULL,
+    identificacion_usuario VARCHAR(20) NOT NULL,
+    creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    actualizado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (id_tipo_identificacion_usuario, identificacion_usuario)
+        REFERENCES usuarios(id_tipo_identificacion, identificacion_usuario) ON DELETE RESTRICT
+);
+
+-- Índices para compras
+CREATE INDEX idx_compras_fecha ON compras(fecha_compra DESC);
+CREATE INDEX idx_compras_usuario ON compras(id_tipo_identificacion_usuario, identificacion_usuario);
+
+-- Detalle de compras (productos comprados)
+-- CASCADE: Si se elimina la compra, se eliminan los detalles
+CREATE TABLE detalle_compra (
+    id_detalle_compra SERIAL PRIMARY KEY,
+    id_compra INTEGER NOT NULL REFERENCES compras(id_compra) ON DELETE CASCADE,
+    id_producto INTEGER NOT NULL REFERENCES productos(id_producto) ON DELETE RESTRICT,
+    cantidad_detalle_compra NUMERIC(12, 2) NOT NULL CHECK (cantidad_detalle_compra > 0),
+    precio_unitario_compra NUMERIC(12, 2) NOT NULL CHECK (precio_unitario_compra >= 0),
+    subtotal_compra NUMERIC(12, 2) GENERATED ALWAYS AS (cantidad_detalle_compra * precio_unitario_compra) STORED,
+    creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_detalle_compra_compra ON detalle_compra(id_compra);
+CREATE INDEX idx_detalle_compra_producto ON detalle_compra(id_producto);
 
 -- ============================================
 -- FUNCIONES Y TRIGGERS
@@ -222,82 +265,53 @@ CREATE TRIGGER trigger_ventas_timestamp
     FOR EACH ROW
     EXECUTE FUNCTION actualizar_timestamp();
 
+CREATE TRIGGER trigger_compras_timestamp
+    BEFORE UPDATE ON compras
+    FOR EACH ROW
+    EXECUTE FUNCTION actualizar_timestamp();
+
 -- ============================================
--- DATOS INICIALES
+-- COMENTARIOS
 -- ============================================
 
+COMMENT ON TABLE tipos_identificacion IS 'Tipos de documentos de identificación (CC, CE, Pasaporte, etc.)';
+COMMENT ON TABLE usuarios IS 'Usuarios del sistema con autenticación JWT';
+COMMENT ON TABLE roles IS 'Roles con acceso a diferentes módulos';
+COMMENT ON TABLE formularios IS 'Menú dinámico del sistema';
+COMMENT ON TABLE roles_formularios IS 'Permisos simples: si existe = acceso completo al formulario';
+COMMENT ON TABLE categorias IS 'Categorías de productos del gimnasio';
+COMMENT ON TABLE unidades_medida IS 'Unidades de medida (UND, KG, LT, etc.)';
+COMMENT ON TABLE productos IS 'Catálogo de productos del gimnasio';
+COMMENT ON TABLE metodos_pago IS 'Métodos de pago disponibles (Efectivo, Tarjeta, Nequi, etc.)';
+COMMENT ON TABLE ventas IS 'Registro de ventas normales y fiadas';
+COMMENT ON TABLE detalle_venta IS 'Detalle de productos vendidos por cada venta';
+COMMENT ON TABLE ventas_pagos IS 'Pagos mixtos y abonos de ventas';
+COMMENT ON TABLE compras IS 'Registro de compras de inventario';
+COMMENT ON TABLE detalle_compra IS 'Detalle de productos comprados por cada compra';
+
+-- ============================================
+-- DATOS INICIALES (COMENTADOS - REVISAR ANTES DE USAR)
+-- ============================================
+-- NOTA: Los INSERT están comentados porque necesitan revisión.
+-- Descomentar y corregir según necesites datos de prueba.
+
+/*
 -- Tipos de identificación
-INSERT INTO tipos_identificacion (descripcion) VALUES
-('Cédula de Ciudadanía'),
-('Cédula de Extranjería'),
-('Pasaporte'),
-('NIT'),
-('Tarjeta de Identidad');
+INSERT INTO tipos_identificacion (nombre_tipo_identificacion, descripcion_tipo_identificacion) VALUES
+('CC', 'Cédula de Ciudadanía'),
+('CE', 'Cédula de Extranjería'),
+('PA', 'Pasaporte'),
+('NIT', 'NIT'),
+('TI', 'Tarjeta de Identidad');
 
 -- Roles del sistema
-INSERT INTO roles (nombre, descripcion) VALUES
+INSERT INTO roles (nombre_rol, descripcion_rol) VALUES
 ('ADMINISTRADOR', 'Acceso total al sistema'),
 ('VENDEDOR', 'Puede realizar ventas y consultar inventario'),
 ('BODEGUERO', 'Gestión de inventario y productos');
 
--- Formularios principales
-INSERT INTO formularios (nombre, ruta, padre_id, orden, icono) VALUES
-('Dashboard', '/dashboard', NULL, 1, 'dashboard'),
-('Ventas', NULL, NULL, 2, 'shopping_cart'),
-('Inventario', NULL, NULL, 3, 'inventory'),
-('Reportes', NULL, NULL, 4, 'assessment'),
-('Configuración', NULL, NULL, 5, 'settings');
-
--- Submenús de Ventas
-INSERT INTO formularios (nombre, ruta, padre_id, orden, icono) VALUES
-('Nueva Venta', '/ventas/nueva', 2, 1, 'add_shopping_cart'),
-('Historial Ventas', '/ventas/historial', 2, 2, 'history'),
-('Fiados Pendientes', '/ventas/fiados', 2, 3, 'account_balance_wallet'),
-('Registrar Abono', '/ventas/abonos', 2, 4, 'payment');
-
--- Submenús de Inventario
-INSERT INTO formularios (nombre, ruta, padre_id, orden, icono) VALUES
-('Productos', '/inventario/productos', 3, 1, 'category'),
-('Categorías', '/inventario/categorias', 3, 2, 'label'),
-('Unidades', '/inventario/unidades', 3, 3, 'straighten');
-
--- Submenús de Reportes
-INSERT INTO formularios (nombre, ruta, padre_id, orden, icono) VALUES
-('Ventas por Período', '/reportes/ventas', 4, 1, 'bar_chart'),
-('Rentabilidad', '/reportes/rentabilidad', 4, 2, 'trending_up'),
-('Productos Más Vendidos', '/reportes/productos', 4, 3, 'star');
-
--- Submenús de Configuración
-INSERT INTO formularios (nombre, ruta, padre_id, orden, icono) VALUES
-('Usuarios', '/config/usuarios', 5, 1, 'people'),
-('Roles y Permisos', '/config/roles', 5, 2, 'security'),
-('Métodos de Pago', '/config/metodos-pago', 5, 3, 'payment');
-
--- Permisos para ADMINISTRADOR (acceso total)
-INSERT INTO roles_formularios (id_rol, id_formulario)
-SELECT 1, id_formulario FROM formularios;
-
--- Permisos para VENDEDOR
-INSERT INTO roles_formularios (id_rol, id_formulario) VALUES
-(2, 1),  -- Dashboard
-(2, 2),  -- Ventas (módulo)
-(2, 6),  -- Nueva Venta
-(2, 7),  -- Historial Ventas
-(2, 8),  -- Fiados Pendientes
-(2, 9),  -- Registrar Abono
-(2, 3),  -- Inventario (módulo)
-(2, 10); -- Productos (consulta)
-
--- Permisos para BODEGUERO
-INSERT INTO roles_formularios (id_rol, id_formulario) VALUES
-(3, 1),  -- Dashboard
-(3, 3),  -- Inventario (módulo)
-(3, 10), -- Productos
-(3, 11), -- Categorías
-(3, 12); -- Unidades
-
 -- Categorías
-INSERT INTO categorias (nombre, descripcion) VALUES
+INSERT INTO categorias (nombre_categoria, descripcion_categoria) VALUES
 ('Suplementos', 'Proteínas, creatinas, aminoácidos'),
 ('Bebidas', 'Bebidas energéticas, isotónicas, jugos'),
 ('Snacks', 'Barras energéticas, frutos secos'),
@@ -305,7 +319,7 @@ INSERT INTO categorias (nombre, descripcion) VALUES
 ('Ropa', 'Camisetas, shorts, medias');
 
 -- Unidades de medida
-INSERT INTO unidades_medida (nombre, abreviatura, descripcion) VALUES
+INSERT INTO unidades_medida (nombre_unidad_medida, abreviatura_unidad_medida, descripcion_unidad_medida) VALUES
 ('Unidad', 'UND', 'Artículo individual'),
 ('Kilogramo', 'KG', 'Medida de peso'),
 ('Gramo', 'GR', 'Medida de peso pequeña'),
@@ -313,33 +327,14 @@ INSERT INTO unidades_medida (nombre, abreviatura, descripcion) VALUES
 ('Mililitro', 'ML', 'Medida de volumen pequeña');
 
 -- Métodos de pago
-INSERT INTO metodos_pago (nombre, descripcion) VALUES
+INSERT INTO metodos_pago (nombre_metodo_pago, descripcion_metodo_pago) VALUES
 ('Efectivo', 'Pago en efectivo'),
 ('Tarjeta Débito', 'Pago con tarjeta débito'),
 ('Tarjeta Crédito', 'Pago con tarjeta de crédito'),
 ('Transferencia', 'Transferencia bancaria'),
 ('Nequi', 'Pago por Nequi'),
 ('Daviplata', 'Pago por Daviplata');
-
--- Productos de ejemplo (opcional)
-INSERT INTO productos (nombre, descripcion, id_categoria, id_unidad, precio_costo, precio_venta, stock_actual, stock_minimo, codigo_barras) VALUES
-('Proteína Whey 2lb', 'Proteína de suero de leche sabor chocolate', 1, 1, 80000, 120000, 15, 5, '7501234567890'),
-('Creatina 300g', 'Creatina monohidratada pura', 1, 1, 45000, 70000, 20, 5, '7501234567891'),
-('Gatorade 500ml', 'Bebida isotónica sabor naranja', 2, 1, 2500, 4000, 50, 10, '7501234567892'),
-('Barra Proteica', 'Barra energética con 20g de proteína', 3, 1, 3000, 5000, 30, 10, '7501234567893'),
-('Guantes Gym', 'Guantes para entrenamiento con pesas', 4, 1, 15000, 25000, 10, 3, '7501234567894');
-
--- ============================================
--- COMENTARIOS
--- ============================================
-
-COMMENT ON TABLE usuarios IS 'Usuarios del sistema con autenticación JWT';
-COMMENT ON TABLE roles IS 'Roles con acceso a diferentes módulos';
-COMMENT ON TABLE formularios IS 'Menú dinámico del sistema';
-COMMENT ON TABLE roles_formularios IS 'Permisos simples: si existe = acceso completo';
-COMMENT ON TABLE productos IS 'Catálogo de productos del gimnasio';
-COMMENT ON TABLE ventas IS 'Registro de ventas normales y fiadas';
-COMMENT ON TABLE ventas_pagos IS 'Pagos mixtos y abonos de ventas';
+*/
 
 -- ============================================
 -- FIN DEL SCRIPT
