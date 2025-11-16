@@ -1,23 +1,41 @@
-import oracledb from 'oracledb';
-import dotenv from 'dotenv';
+// src/config/db.js
+// Conexión a PostgreSQL usando Knex
+// MIGRADO DE ORACLE A POSTGRESQL
 
-dotenv.config();
+import knex from "knex";
+import knexConfig from "../../knexfile.js";
 
-const dbConfig = {
-  user: process.env.db_user,
-  password: process.env.db_password,
-  connectString: process.env.db_connectionString,
-};
+// Detectar ambiente (development, staging, production)
+const environment = process.env.NODE_ENV || "development";
 
-async function getConnection() {
-  try {
-    const connection = await oracledb.getConnection(dbConfig);
-    console.log('Conexión a Oracle exitosa');
-    return connection;
-  } catch (error) {
-    console.error('❌ Error conectando a Oracle:', error);
-    throw error;
-  }
-}
+console.log(`🔧 Configurando Knex para ambiente: ${environment}`);
 
-export { getConnection };
+// Seleccionar configuración según ambiente
+const config = knexConfig[environment];
+
+// Crear instancia de Knex
+const db = knex(config);
+
+// Probar conexión al iniciar
+db.raw("SELECT 1+1 AS resultado")
+  .then(() => {
+    console.log("✅ Conexión a PostgreSQL exitosa");
+    console.log(
+      `📊 Base de datos: ${config.connection.database || "desde DATABASE_URL"}`,
+    );
+  })
+  .catch((err) => {
+    console.error("❌ Error conectando a PostgreSQL:");
+    console.error("   Mensaje:", err.message);
+    console.error(
+      "   Verifica tu archivo .env y que PostgreSQL esté corriendo",
+    );
+    process.exit(1);
+  });
+
+// Exportar instancia de Knex como export default
+export default db;
+
+// También exportar como named export para compatibilidad
+// (por si algún controlador usa: import { db } from ...)
+export { db };
