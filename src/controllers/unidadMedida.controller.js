@@ -1,4 +1,4 @@
-import { getConnection } from "../config/db.js";
+import db from "../config/db.js";
 
 const collapseSpaces = (s) =>
   typeof s === "string" ? s.trim().replace(/\s+/g, " ") : "";
@@ -11,34 +11,28 @@ const PATRON_PERMITIDO = /^[A-Za-zÁÉÍÓÚáéíóúÑñ\s\-.]+$/;
 /** Busca coincidencia canónica por nombre (sin acentos, lower, colapsando espacios).
  *  Retorna true si existe otro registro con el mismo "nombre canónico".
  */
-async function existeNombreCanonico(connection, nombre, excludeId = null) {
-  const sql = `
-    SELECT 1
-    FROM UNIDAD_MEDIDAS
-    WHERE NLSSORT(REPLACE(NOMBRE_UNIDAD_MEDIDA, ' ', ''), 'NLS_SORT=BINARY_AI')
-          = NLSSORT(REPLACE(:p_nombre, ' ', ''), 'NLS_SORT=BINARY_AI')
-      AND (:p_exclude_id IS NULL OR CODIGO_UNIDAD_MEDIDA <> :p_exclude_id)
-    FETCH FIRST 1 ROWS ONLY
-  `;
-  const r = await connection.execute(sql, { p_nombre: nombre, p_exclude_id: excludeId });
-  return r.rows.length > 0;
+async function existeNombreCanonico(nombre, excludeId = null) {
+  const query = db("unidades_medida").whereRaw(
+    "LOWER(REPLACE(nombre_unidad_medida, ' ', '')) = LOWER(REPLACE(?, ' ', ''))",
+    [nombre],
+  );
+
+  if (excludeId !== null) {
+    query.whereNot("id_unidad_medida", excludeId);
+  }
+
+  const result = await query.first();
+  return !!result;
 }
 
 /** Devuelve productos que usan la unidad (para mensaje amigable). */
-async function productosQueUsan(connection, unidadId, limit = 25) {
-  const sql = `
-    SELECT ID_PRODUCTO, NOMBRE_PRODUCTO
-      FROM PRODUCTOS
-     WHERE UNIDAD_MEDIDA = :p_id
-     ORDER BY NOMBRE_PRODUCTO
-  `;
-  const r = await connection.execute(sql, { p_id: unidadId });
-  const productos = r.rows.map((row) => ({
-    id: row[0],
-    nombre: row[1],
-  }));
+async function productosQueUsan(unidadId, limit = 25) {
+  const productos = await db("productos")
+    .select("id_producto as id", "nombre_producto as nombre")
+    .where("id_unidad_medida", unidadId)
+    .orderBy("nombre_producto");
+
   const total = productos.length;
-  // cap de seguridad
   const lista = productos.slice(0, limit);
   return { total, productos: lista, truncated: total > limit };
 }
@@ -46,20 +40,15 @@ async function productosQueUsan(connection, unidadId, limit = 25) {
 // LISTAR TODAS LAS UNIDADES DE MEDIDA
 export const listarUnidadesMedida = async (req, res) => {
   try {
-    const connection = await getConnection();
-    const result = await connection.execute(
-      `SELECT CODIGO_UNIDAD_MEDIDA, NOMBRE_UNIDAD_MEDIDA, DESCRIPCION_UNIDAD_MEDIDA
-         FROM UNIDAD_MEDIDAS
-         ORDER BY NOMBRE_UNIDAD_MEDIDA`
-    );
+    const unidades = await db("unidades_medida")
+      .select(
+        "id_unidad_medida",
+        "nombre_unidad_medida",
+        "abreviatura_unidad_medida",
+        "descripcion_unidad_medida",
+      )
+      .orderBy("nombre_unidad_medida");
 
-    const unidades = result.rows.map((row) => ({
-      codigo_unidad_medida: row[0],
-      nombre_unidad_medida: row[1],
-      descripcion_unidad_medida: row[2],
-    }));
-
-    await connection.close();
     res.json(unidades);
   } catch (error) {
     console.error("Error al listar unidades de medida:", error);
@@ -69,51 +58,52 @@ export const listarUnidadesMedida = async (req, res) => {
 
 // CREAR UNA NUEVA UNIDAD DE MEDIDA
 export const crearUnidadMedida = async (req, res) => {
-  let { nombre_unidad_medida, descripcion_unidad_medida } = req.body;
+  let {
+    nombre_unidad_medida,
+    abreviatura_unidad_medida,
+    descripcion_unidad_medida,
+  } = req.body;
 
   nombre_unidad_medida = collapseSpaces(nombre_unidad_medida ?? "");
+  abreviatura_unidad_medida = collapseSpaces(abreviatura_unidad_medida ?? "");
   descripcion_unidad_medida = collapseSpaces(descripcion_unidad_medida ?? "");
 
   if (!nombre_unidad_medida) {
     return res.status(400).json({ message: "El nombre es obligatorio." });
   }
   if (nombre_unidad_medida.length > MAX_LEN_NOMBRE) {
-    return res
-      .status(400)
-      .json({ message: `El nombre admite máximo ${MAX_LEN_NOMBRE} caracteres.` });
+    return res.status(400).json({
+      message: `El nombre admite máximo ${MAX_LEN_NOMBRE} caracteres.`,
+    });
   }
   if (!PATRON_PERMITIDO.test(nombre_unidad_medida)) {
     return res.status(400).json({
-      message: "El nombre solo puede contener letras, espacios, guiones y puntos.",
+      message:
+        "El nombre solo puede contener letras, espacios, guiones y puntos.",
     });
   }
-  if (descripcion_unidad_medida && descripcion_unidad_medida.length > MAX_LEN_DESC) {
-    return res
-      .status(400)
-      .json({ message: `La descripción admite máximo ${MAX_LEN_DESC} caracteres.` });
+  if (
+    descripcion_unidad_medida &&
+    descripcion_unidad_medida.length > MAX_LEN_DESC
+  ) {
+    return res.status(400).json({
+      message: `La descripción admite máximo ${MAX_LEN_DESC} caracteres.`,
+    });
   }
 
   try {
-    const connection = await getConnection();
-
     // Unicidad canónica
-    if (await existeNombreCanonico(connection, nombre_unidad_medida)) {
-      await connection.close();
+    if (await existeNombreCanonico(nombre_unidad_medida)) {
       return res
         .status(409)
         .json({ message: "Ya existe una unidad de medida con ese nombre." });
     }
 
-    await connection.execute(
-      `INSERT INTO UNIDAD_MEDIDAS
-         (CODIGO_UNIDAD_MEDIDA, NOMBRE_UNIDAD_MEDIDA, DESCRIPCION_UNIDAD_MEDIDA)
-       VALUES
-         (SEQ_UNIDAD_MEDIDA.NEXTVAL, :p_nombre, :p_desc)`,
-      { p_nombre: nombre_unidad_medida, p_desc: descripcion_unidad_medida },
-      { autoCommit: true }
-    );
-
-    await connection.close();
+    await db("unidades_medida").insert({
+      nombre_unidad_medida,
+      abreviatura_unidad_medida: abreviatura_unidad_medida || null,
+      descripcion_unidad_medida: descripcion_unidad_medida || null,
+    });
     res.status(201).json({ message: "Unidad de medida creada correctamente." });
   } catch (error) {
     console.error("Error al crear unidad de medida:", error);
@@ -124,51 +114,61 @@ export const crearUnidadMedida = async (req, res) => {
 // ACTUALIZAR UNA UNIDAD DE MEDIDA
 export const actualizarUnidadMedida = async (req, res) => {
   const { id } = req.params;
-  let { nombre_unidad_medida, descripcion_unidad_medida } = req.body;
+  let {
+    nombre_unidad_medida,
+    abreviatura_unidad_medida,
+    descripcion_unidad_medida,
+  } = req.body;
 
   nombre_unidad_medida = collapseSpaces(nombre_unidad_medida ?? "");
+  abreviatura_unidad_medida = collapseSpaces(abreviatura_unidad_medida ?? "");
   descripcion_unidad_medida = collapseSpaces(descripcion_unidad_medida ?? "");
 
   if (!nombre_unidad_medida) {
     return res.status(400).json({ message: "El nombre es obligatorio." });
   }
   if (nombre_unidad_medida.length > MAX_LEN_NOMBRE) {
-    return res
-      .status(400)
-      .json({ message: `El nombre admite máximo ${MAX_LEN_NOMBRE} caracteres.` });
+    return res.status(400).json({
+      message: `El nombre admite máximo ${MAX_LEN_NOMBRE} caracteres.`,
+    });
   }
   if (!PATRON_PERMITIDO.test(nombre_unidad_medida)) {
     return res.status(400).json({
-      message: "El nombre solo puede contener letras, espacios, guiones y puntos.",
+      message:
+        "El nombre solo puede contener letras, espacios, guiones y puntos.",
     });
   }
-  if (descripcion_unidad_medida && descripcion_unidad_medida.length > MAX_LEN_DESC) {
-    return res
-      .status(400)
-      .json({ message: `La descripción admite máximo ${MAX_LEN_DESC} caracteres.` });
+  if (
+    descripcion_unidad_medida &&
+    descripcion_unidad_medida.length > MAX_LEN_DESC
+  ) {
+    return res.status(400).json({
+      message: `La descripción admite máximo ${MAX_LEN_DESC} caracteres.`,
+    });
   }
 
   try {
-    const connection = await getConnection();
-
     // Unicidad canónica excluyendo este ID
-    if (await existeNombreCanonico(connection, nombre_unidad_medida, id)) {
-      await connection.close();
+    if (await existeNombreCanonico(nombre_unidad_medida, id)) {
       return res
         .status(409)
         .json({ message: "Ya existe una unidad de medida con ese nombre." });
     }
 
-    await connection.execute(
-      `UPDATE UNIDAD_MEDIDAS
-          SET NOMBRE_UNIDAD_MEDIDA = :p_nombre,
-              DESCRIPCION_UNIDAD_MEDIDA = :p_desc
-        WHERE CODIGO_UNIDAD_MEDIDA = :p_id`,
-      { p_nombre: nombre_unidad_medida, p_desc: descripcion_unidad_medida, p_id: id },
-      { autoCommit: true }
-    );
+    const rowsAffected = await db("unidades_medida")
+      .where("id_unidad_medida", id)
+      .update({
+        nombre_unidad_medida,
+        abreviatura_unidad_medida: abreviatura_unidad_medida || null,
+        descripcion_unidad_medida: descripcion_unidad_medida || null,
+      });
 
-    await connection.close();
+    if (rowsAffected === 0) {
+      return res
+        .status(404)
+        .json({ message: "Unidad de medida no encontrada." });
+    }
+
     res.json({ message: "Unidad de medida actualizada correctamente." });
   } catch (error) {
     console.error("Error al actualizar unidad de medida:", error);
@@ -179,38 +179,39 @@ export const actualizarUnidadMedida = async (req, res) => {
 // ELIMINAR UNA UNIDAD DE MEDIDA
 // - Si NO está en uso -> borra.
 // - Si SÍ está en uso por productos -> 409 con la lista de productos que la usan.
+// TODO: Implementar soft delete (activa=false) en lugar de DELETE físico
 export const eliminarUnidadMedida = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const connection = await getConnection();
-
-    const { total, productos, truncated } = await productosQueUsan(connection, id);
+    const { total, productos, truncated } = await productosQueUsan(id);
 
     if (total > 0) {
-      await connection.close();
       return res.status(409).json({
         message:
           `No se puede eliminar esta unidad porque está en uso por ${total} producto(s). ` +
           `Debes editar esos productos y cambiar la unidad antes de eliminarla.`,
         requiresUpdateProducts: true,
         totalProductos: total,
-        productos: productos.map((p) => p.nombre), // devolvemos solo nombres para el front
-        truncated, // true si solo se envió una parte de la lista
+        productos: productos.map((p) => p.nombre),
+        truncated,
       });
     }
 
-    await connection.execute(
-      `DELETE FROM UNIDAD_MEDIDAS WHERE CODIGO_UNIDAD_MEDIDA = :p_id`,
-      { p_id: id },
-      { autoCommit: true }
-    );
+    const rowsAffected = await db("unidades_medida")
+      .where("id_unidad_medida", id)
+      .delete();
 
-    await connection.close();
+    if (rowsAffected === 0) {
+      return res
+        .status(404)
+        .json({ message: "Unidad de medida no encontrada." });
+    }
+
     res.json({ message: "Unidad de medida eliminada correctamente." });
   } catch (error) {
-    // Si la FK explotara igualmente por carrera, manejamos ORA-02292
-    if (error && error.errorNum === 2292) {
+    // PostgreSQL foreign key violation error code
+    if (error && error.code === "23503") {
       return res.status(409).json({
         message:
           "No se puede eliminar esta unidad porque está en uso por productos. " +

@@ -8,13 +8,13 @@ import morgan from "morgan";
 // RUTAS MIGRADAS A POSTGRESQL ✅
 // ============================================
 import categoriasRoutes from "./routes/categorias.routes.js";
+import unidadesMedidasRoutes from "./routes/unidadesMedidas.routes.js";
 
 // ============================================
 // RUTAS PENDIENTES DE MIGRAR ⏳
 // (Comentadas temporalmente hasta migrar sus controladores)
 // ============================================
 // import authRoutes from './routes/auth.routes.js';
-// import unidadesMedidasRoutes from './routes/unidadesMedidas.routes.js';
 // import rolesRoutes from './routes/roles.routes.js';
 // import productosRoutes from './routes/productos.routes.js';
 // import perfilesRoutes from './routes/perfiles.routes.js';
@@ -38,12 +38,12 @@ app.use(urlencoded({ extended: true }));
 // RUTAS ACTIVAS ✅
 // ============================================
 app.use("/api", categoriasRoutes);
+app.use("/api", unidadesMedidasRoutes);
 
 // ============================================
 // RUTAS COMENTADAS (PENDIENTES DE MIGRACIÓN) ⏳
 // ============================================
 // app.use("/api", authRoutes);
-// app.use("/api", unidadesMedidasRoutes);
 // app.use("/api", rolesRoutes);
 // app.use("/api", productosRoutes);
 // app.use("/api", perfilesRoutes);
@@ -66,6 +66,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor activo en http://localhost:${PORT}`);
   console.log(`📊 Base de datos: PostgreSQL`);
-  console.log(`🔧 Controladores migrados: 1/13`);
-
+  console.log(`🔧 Controladores migrados: 2/13`);
 });
