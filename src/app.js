@@ -10,13 +10,13 @@ import morgan from "morgan";
 import categoriasRoutes from "./routes/categorias.routes.js";
 import unidadesMedidasRoutes from "./routes/unidadesMedidas.routes.js";
 import tipoIdentificacionRoutes from "./routes/tipoIdentificacion.routes.js";
+import rolesRoutes from "./routes/roles.routes.js";
 
 // ============================================
 // RUTAS PENDIENTES DE MIGRAR ⏳
 // (Comentadas temporalmente hasta migrar sus controladores)
 // ============================================
 // import authRoutes from './routes/auth.routes.js';
-// import rolesRoutes from './routes/roles.routes.js';
 // import productosRoutes from './routes/productos.routes.js';
 // import perfilesRoutes from './routes/perfiles.routes.js';
 // import usuariosRoutes from './routes/usuarios.routes.js';
@@ -40,12 +40,12 @@ app.use(urlencoded({ extended: true }));
 app.use("/api", categoriasRoutes);
 app.use("/api", unidadesMedidasRoutes);
 app.use("/api", tipoIdentificacionRoutes);
+app.use("/api", rolesRoutes);
 
 // ============================================
 // RUTAS COMENTADAS (PENDIENTES DE MIGRACIÓN) ⏳
 // ============================================
 // app.use("/api", authRoutes);
-// app.use("/api", rolesRoutes);
 // app.use("/api", productosRoutes);
 // app.use("/api", perfilesRoutes);
 // app.use("/api", usuariosRoutes);
@@ -66,5 +66,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor activo en http://localhost:${PORT}`);
   console.log(`📊 Base de datos: PostgreSQL`);
-  console.log(`🔧 Controladores migrados: 3/13`);
+  console.log(`🔧 Controladores migrados: 4/13`);
 });
