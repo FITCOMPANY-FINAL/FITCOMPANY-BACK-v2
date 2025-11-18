@@ -176,12 +176,16 @@ export const asignarPermiso = async (req, res) => {
 // POST /api/permisos/bulk
 // Asigna múltiples formularios a un rol de una vez
 export const asignarPermisosBulk = async (req, res) => {
-  const { id_rol, formularios } = req.body;
+  const { id_rol, id_formularios } = req.body;
 
   // Validaciones
-  if (!id_rol || !Array.isArray(formularios) || formularios.length === 0) {
+  if (
+    !id_rol ||
+    !Array.isArray(id_formularios) ||
+    id_formularios.length === 0
+  ) {
     return res.status(400).json({
-      message: "Se requieren id_rol y un array de formularios.",
+      message: "Se requieren id_rol e id_formularios (array).",
     });
   }
 
@@ -191,16 +195,26 @@ export const asignarPermisosBulk = async (req, res) => {
       return res.status(404).json({ message: "El rol no existe." });
     }
 
+    // Validar que TODOS los formularios existen ANTES de insertar
+    const formularioInvalidos = [];
+    for (const id_formulario of id_formularios) {
+      if (!(await existeFormulario(id_formulario))) {
+        formularioInvalidos.push(id_formulario);
+      }
+    }
+
+    if (formularioInvalidos.length > 0) {
+      return res.status(400).json({
+        message: `Los siguientes formularios no existen: ${formularioInvalidos.join(", ")}`,
+        formularioInvalidos,
+      });
+    }
+
     const permisosAsignados = [];
     const permisosExistentes = [];
     const padresAsignados = new Set();
 
-    for (const id_formulario of formularios) {
-      // Verificar que el formulario existe
-      if (!(await existeFormulario(id_formulario))) {
-        continue; // Saltar formularios inexistentes
-      }
-
+    for (const id_formulario of id_formularios) {
       // Verificar si ya existe
       if (await existePermiso(id_rol, id_formulario)) {
         permisosExistentes.push(id_formulario);
