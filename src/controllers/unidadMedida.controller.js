@@ -177,9 +177,8 @@ export const actualizarUnidadMedida = async (req, res) => {
 };
 
 // ELIMINAR UNA UNIDAD DE MEDIDA
-// - Si NO está en uso -> borra.
-// - Si SÍ está en uso por productos -> 409 con la lista de productos que la usan.
-// TODO: Implementar soft delete (activa=false) en lugar de DELETE físico
+// - Si NO está en uso -> borra físicamente
+// - Si SÍ está en uso por productos -> 409 con lista de productos
 export const eliminarUnidadMedida = async (req, res) => {
   const { id } = req.params;
 
