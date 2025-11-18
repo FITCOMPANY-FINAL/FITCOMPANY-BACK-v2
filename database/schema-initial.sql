@@ -36,6 +36,7 @@ CREATE TABLE tipos_identificacion (
     id_tipo_identificacion SERIAL PRIMARY KEY,
     nombre_tipo_identificacion VARCHAR(50) NOT NULL UNIQUE,
     descripcion_tipo_identificacion VARCHAR(200),
+    activo BOOLEAN DEFAULT TRUE NOT NULL,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -44,6 +45,7 @@ CREATE TABLE roles (
     id_rol SERIAL PRIMARY KEY,
     nombre_rol VARCHAR(50) NOT NULL UNIQUE,
     descripcion_rol TEXT,
+    activo BOOLEAN DEFAULT TRUE NOT NULL,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -107,6 +109,7 @@ CREATE TABLE unidades_medida (
     nombre_unidad_medida VARCHAR(50) NOT NULL,
     abreviatura_unidad_medida VARCHAR(10),
     descripcion_unidad_medida TEXT,
+    activo BOOLEAN DEFAULT TRUE NOT NULL,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

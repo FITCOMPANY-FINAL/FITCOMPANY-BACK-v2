@@ -114,9 +114,21 @@ DROP COLUMN IF EXISTS nueva_columna FROM nombre_tabla;
 
 ## 📊 Historial de Migraciones
 
-| # | Archivo | Fecha | Descripción |
-|---|---------|-------|-------------|
-| 001 | `001-add-activo-columns.sql` | 2024-11-17 | Agregar columna `activo` a tablas maestras (tipos_identificacion, roles, unidades_medida) para soporte de soft delete futuro |
+| # | Archivo | Fecha | Descripción | ¿Necesaria? |
+|---|---------|-------|-------------|-------------|
+| 001 | `001-add-activo-columns.sql` | 2024-11-17 | Agregar columna `activo` a tablas maestras (tipos_identificacion, roles, unidades_medida) | ⚠️ **Solo si creaste tu BD antes del 2024-11-17** |
+
+### ⚠️ Nota importante sobre migración 001:
+
+**SI ejecutaste `schema-initial.sql` DESPUÉS del 2024-11-17:**
+- ✅ Las columnas `activo` ya están incluidas en el schema
+- ❌ **NO necesitas** ejecutar la migración 001
+- ✅ Tu base de datos ya está completa
+
+**SI ejecutaste `schema-initial.sql` ANTES del 2024-11-17:**
+- ⚠️ Tu BD no tiene las columnas `activo`
+- ✅ **SÍ necesitas** ejecutar la migración 001
+- ✅ Ejecuta: `psql -U postgres -d gimnasio_db -f database/migrations/001-add-activo-columns.sql`
 
 ---
 
