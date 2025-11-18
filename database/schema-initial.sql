@@ -35,6 +35,7 @@ DROP TABLE IF EXISTS tipos_identificacion CASCADE;
 CREATE TABLE tipos_identificacion (
     id_tipo_identificacion SERIAL PRIMARY KEY,
     nombre_tipo_identificacion VARCHAR(50) NOT NULL UNIQUE,
+    abreviatura_tipo_identificacion VARCHAR(10),
     descripcion_tipo_identificacion VARCHAR(200),
     activo BOOLEAN DEFAULT TRUE NOT NULL,
     creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP

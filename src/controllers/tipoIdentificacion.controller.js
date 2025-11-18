@@ -62,6 +62,7 @@ export const listarTiposIdentificacion = async (req, res) => {
       .select(
         "id_tipo_identificacion as id",
         "nombre_tipo_identificacion as nombre",
+        "abreviatura_tipo_identificacion as abreviatura",
         "descripcion_tipo_identificacion as descripcion",
       )
       .orderBy("nombre_tipo_identificacion");
@@ -92,8 +93,9 @@ export const existeTipoIdentificacion = async (req, res) => {
 };
 
 export const crearTipoIdentificacion = async (req, res) => {
-  let { nombre, descripcion } = req.body;
+  let { nombre, abreviatura, descripcion } = req.body;
   nombre = collapseSpaces(nombre);
+  abreviatura = collapseSpaces(abreviatura ?? "");
   descripcion = collapseSpaces(descripcion ?? "");
 
   if (!nombre)
@@ -101,24 +103,21 @@ export const crearTipoIdentificacion = async (req, res) => {
   if (nombre.length > MAX_LEN)
     return res.status(400).json({ message: `Máximo ${MAX_LEN} caracteres.` });
   if (!PATRON_PERMITIDO.test(nombre))
-    return res
-      .status(400)
-      .json({
-        message: "Solo se permiten letras, espacios, guiones y puntos.",
-      });
+    return res.status(400).json({
+      message: "Solo se permiten letras, espacios, guiones y puntos.",
+    });
 
   try {
     const found = await encontrarCanonica(nombre);
     if (found) {
-      return res
-        .status(409)
-        .json({
-          message: "Ya existe un tipo de identificación con ese nombre.",
-        });
+      return res.status(409).json({
+        message: "Ya existe un tipo de identificación con ese nombre.",
+      });
     }
 
     await db("tipos_identificacion").insert({
       nombre_tipo_identificacion: nombre,
+      abreviatura_tipo_identificacion: abreviatura || null,
       descripcion_tipo_identificacion: descripcion || null,
     });
 
@@ -133,8 +132,9 @@ export const crearTipoIdentificacion = async (req, res) => {
 
 export const actualizarTipoIdentificacion = async (req, res) => {
   const { id } = req.params;
-  let { nombre, descripcion } = req.body;
+  let { nombre, abreviatura, descripcion } = req.body;
   nombre = collapseSpaces(nombre);
+  abreviatura = collapseSpaces(abreviatura ?? "");
   descripcion = collapseSpaces(descripcion ?? "");
 
   if (!nombre)
@@ -142,26 +142,23 @@ export const actualizarTipoIdentificacion = async (req, res) => {
   if (nombre.length > MAX_LEN)
     return res.status(400).json({ message: `Máximo ${MAX_LEN} caracteres.` });
   if (!PATRON_PERMITIDO.test(nombre))
-    return res
-      .status(400)
-      .json({
-        message: "Solo se permiten letras, espacios, guiones y puntos.",
-      });
+    return res.status(400).json({
+      message: "Solo se permiten letras, espacios, guiones y puntos.",
+    });
 
   try {
     const found = await encontrarCanonica(nombre, id);
     if (found) {
-      return res
-        .status(409)
-        .json({
-          message: "Ya existe un tipo de identificación con ese nombre.",
-        });
+      return res.status(409).json({
+        message: "Ya existe un tipo de identificación con ese nombre.",
+      });
     }
 
     const rowsAffected = await db("tipos_identificacion")
       .where("id_tipo_identificacion", id)
       .update({
         nombre_tipo_identificacion: nombre,
+        abreviatura_tipo_identificacion: abreviatura || null,
         descripcion_tipo_identificacion: descripcion || null,
       });
 

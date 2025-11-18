@@ -117,6 +117,7 @@ DROP COLUMN IF EXISTS nueva_columna FROM nombre_tabla;
 | # | Archivo | Fecha | Descripción | ¿Necesaria? |
 |---|---------|-------|-------------|-------------|
 | 001 | `001-add-activo-columns.sql` | 2024-11-17 | Agregar columna `activo` a tablas maestras (tipos_identificacion, roles, unidades_medida) | ⚠️ **Solo si creaste tu BD antes del 2024-11-17** |
+| 002 | `002-add-abreviatura-tipos-identificacion.sql` | 2024-11-17 | Agregar columna `abreviatura_tipo_identificacion` para mostrar en formularios (ej: CC, CE, NIT) | ⚠️ **Solo si creaste tu BD antes del 2024-11-17** |
 
 ### ⚠️ Nota importante sobre migración 001:
 
