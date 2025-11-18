@@ -2,17 +2,6 @@ import db from "../config/db.js";
 import bcrypt from "bcryptjs";
 
 
-
-/* ===========================
-   MIGRADO DE ORACLE A POSTGRESQL
-   =========================== */
-// Cambios principales:
-// ✅ DATOS_PERSONALES (objeto) → columnas directas
-// ✅ PERFIL_USUARIO + PERFIL_ROL_USUARIO → solo id_rol
-// ✅ CONTRASENNIA_USUARIO → hash_password_usuario (con bcrypt)
-// ✅ TREAT() → acceso directo a columnas
-// ✅ getConnection() → db (Knex)
-
 /* ===========================
    Helpers y constantes
    =========================== */
