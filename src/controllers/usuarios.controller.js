@@ -1,241 +1,289 @@
-import { getConnection } from '../config/db.js';
+import db from "../config/db.js";
+import bcrypt from "bcryptjs";
+
+/* ===========================
+   MIGRADO DE ORACLE A POSTGRESQL
+   =========================== */
+// Cambios principales:
+// ✅ DATOS_PERSONALES (objeto) → columnas directas
+// ✅ PERFIL_USUARIO + PERFIL_ROL_USUARIO → solo id_rol
+// ✅ CONTRASENNIA_USUARIO → hash_password_usuario (con bcrypt)
+// ✅ TREAT() → acceso directo a columnas
+// ✅ getConnection() → db (Knex)
 
 /* ===========================
    Helpers y constantes
    =========================== */
 const collapseSpaces = (s) =>
-  typeof s === 'string' ? s.trim().replace(/\s+/g, ' ') : '';
+  typeof s === "string" ? s.trim().replace(/\s+/g, " ") : "";
 
 const MAX_LEN_STR = 100;
 const PATRON_NOMBRE = /^[A-Za-zÁÉÍÓÚáéíóúÑñ\s\-.]+$/;
 const PATRON_IDENT = /^[A-Za-z0-9.\-]+$/; // sin espacios
 const PATRON_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i;
 
-async function existeUsuarioPorIdent(connection, ident) {
-  const r = await connection.execute(
-    `SELECT 1
-       FROM USUARIOS u
-      WHERE TREAT(u.DATOS_PERSONALES AS PersonaBase).IDENTIFICACION_USUARIO = :id
-      FETCH FIRST 1 ROWS ONLY`,
-    { id: ident }
-  );
-  return r.rows.length > 0;
+/** Verifica si existe un usuario por identificación */
+async function existeUsuarioPorIdent(
+  ident,
+  excludeTipo = null,
+  excludeIdent = null,
+) {
+  const query = db("usuarios").where("identificacion_usuario", ident);
+
+  // Excluir el usuario actual al editar (por PK compuesta)
+  if (excludeTipo !== null && excludeIdent !== null) {
+    query.whereNot(function () {
+      this.where("id_tipo_identificacion", excludeTipo).where(
+        "identificacion_usuario",
+        excludeIdent,
+      );
+    });
+  }
+
+  const result = await query.first();
+  return !!result;
 }
 
-async function existeUsuarioPorEmail(connection, email, excludeIdent = null) {
-  const r = await connection.execute(
-    `SELECT 1
-       FROM USUARIOS u
-      WHERE LOWER(TREAT(u.DATOS_PERSONALES AS PersonaBase).EMAIL_USUARIO) = LOWER(:e)
-        AND (:ex IS NULL OR TREAT(u.DATOS_PERSONALES AS PersonaBase).IDENTIFICACION_USUARIO <> :ex)
-      FETCH FIRST 1 ROWS ONLY`,
-    { e: email, ex: excludeIdent }
-  );
-  return r.rows.length > 0;
+/** Verifica si existe un usuario por email */
+async function existeUsuarioPorEmail(
+  email,
+  excludeTipo = null,
+  excludeIdent = null,
+) {
+  const query = db("usuarios").whereRaw("LOWER(email_usuario) = LOWER(?)", [
+    email,
+  ]);
+
+  // Excluir el usuario actual al editar (por PK compuesta)
+  if (excludeTipo !== null && excludeIdent !== null) {
+    query.whereNot(function () {
+      this.where("id_tipo_identificacion", excludeTipo).where(
+        "identificacion_usuario",
+        excludeIdent,
+      );
+    });
+  }
+
+  const result = await query.first();
+  return !!result;
 }
 
-/** Verifica si existe el perfil por ID (no impone rol). */
-async function existePerfilPorId(connection, idPerfil) {
-  const r = await connection.execute(
-    `SELECT 1 FROM PERFILES WHERE ID_PERFIL = :p FETCH FIRST 1 ROWS ONLY`,
-    { p: idPerfil }
-  );
-  return r.rows.length > 0;
+/** Verifica si existe el rol por ID */
+async function existeRolPorId(idRol) {
+  const result = await db("roles").where("id_rol", idRol).first();
+  return !!result;
 }
 
-/** Verifica si existe el rol por ID. */
-async function existeRolPorId(connection, idRol) {
-  const r = await connection.execute(
-    `SELECT 1 FROM ROLES WHERE ID_ROL = :r FETCH FIRST 1 ROWS ONLY`,
-    { r: idRol }
-  );
-  return r.rows.length > 0;
+/** Verifica si existe el tipo de identificación por ID */
+async function existeTipoIdentificacionPorId(idTipo) {
+  const result = await db("tipos_identificacion")
+    .where("id_tipo_identificacion", idTipo)
+    .first();
+  return !!result;
 }
 
 /* ===========================
    LISTAR
    =========================== */
 export const listarUsuarios = async (_req, res) => {
-  let connection;
   try {
-    connection = await getConnection();
-
-    const result = await connection.execute(`
-      SELECT 
-        U.DATOS_PERSONALES.TIPO_IDENTIFICACION_USUARIO,
-        U.DATOS_PERSONALES.IDENTIFICACION_USUARIO,
-        U.DATOS_PERSONALES.NOMBRE_USUARIO,
-        U.DATOS_PERSONALES.APELLIDO1_USUARIO,
-        U.DATOS_PERSONALES.APELLIDO2_USUARIO,
-        U.DATOS_PERSONALES.EMAIL_USUARIO,
-        U.PERFIL_USUARIO,
-        U.PERFIL_ROL_USUARIO,
-
-        /* PERFIL (si no hay match, devuelve el id como texto) */
-        TRIM( NVL(
-          (SELECT P.NOMBRE_PERFIL
-             FROM PERFILES P
-            WHERE P.ID_PERFIL = U.PERFIL_USUARIO
-              AND ROWNUM = 1),
-          TO_CHAR(U.PERFIL_USUARIO)
-        )) AS PERFIL_NOMBRE,
-
-        /* ROL (si no hay match, devuelve el id como texto) */
-        TRIM( NVL(
-          (SELECT R.NOMBRE_ROL
-             FROM ROLES R
-            WHERE R.ID_ROL = U.PERFIL_ROL_USUARIO
-              AND ROWNUM = 1),
-          TO_CHAR(U.PERFIL_ROL_USUARIO)
-        )) AS ROL_NOMBRE
-
-      FROM USUARIOS U
-      ORDER BY U.DATOS_PERSONALES.NOMBRE_USUARIO
-    `);
-
-    const usuarios = result.rows.map(row => ({
-      tipo_identificacion: row[0],
-      identificacion:      row[1],
-      nombre:              row[2],
-      apellido1:           row[3],
-      apellido2:           row[4],
-      correo:              row[5],
-      perfil_id:           row[6],
-      perfil_rol:          row[7],
-      perfil_nombre:       row[8],  // texto final
-      rol_nombre:          row[9],  // texto final
-    }));
+    const usuarios = await db("usuarios as u")
+      .join("roles as r", "u.id_rol", "r.id_rol")
+      .join(
+        "tipos_identificacion as t",
+        "u.id_tipo_identificacion",
+        "t.id_tipo_identificacion",
+      )
+      .select(
+        "u.id_tipo_identificacion",
+        "u.identificacion_usuario",
+        "u.nombres_usuario",
+        "u.apellido1_usuario",
+        "u.apellido2_usuario",
+        "u.email_usuario",
+        "u.id_rol",
+        "u.activo",
+        "r.nombre_rol",
+        "t.nombre_tipo_identificacion",
+      )
+      .orderBy("u.nombres_usuario");
 
     res.json(usuarios);
   } catch (error) {
-    console.error('Error al listar usuarios:', error);
-    res.status(500).json({ message: 'Error al listar usuarios.' });
-  } finally {
-    if (connection) await connection.close();
+    console.error("Error al listar usuarios:", error);
+    res.status(500).json({ message: "Error al listar usuarios." });
   }
 };
-
 
 /* ===========================
    CREAR
    =========================== */
 export const crearUsuario = async (req, res) => {
   let {
-    tipo_identificacion,
-    identificacion,
-    nombre,
-    apellido1,
-    apellido2,
-    correo,
-    contrasennia,
-    perfil_id,
-    perfil_rol, // <-- ahora viene del front y NO se cruza con el perfil
+    id_tipo_identificacion,
+    identificacion_usuario,
+    nombres_usuario,
+    apellido1_usuario,
+    apellido2_usuario,
+    email_usuario,
+    password,
+    id_rol,
   } = req.body;
 
   // Normalización
-  identificacion = (identificacion ?? '').trim();
-  nombre = collapseSpaces(nombre ?? '');
-  apellido1 = collapseSpaces(apellido1 ?? '');
-  apellido2 = collapseSpaces(apellido2 ?? '');
-  correo = (correo ?? '').trim().toLowerCase();
+  identificacion_usuario = (identificacion_usuario ?? "").trim();
+  nombres_usuario = collapseSpaces(nombres_usuario ?? "");
+  apellido1_usuario = collapseSpaces(apellido1_usuario ?? "");
+  apellido2_usuario = collapseSpaces(apellido2_usuario ?? "");
+  email_usuario = (email_usuario ?? "").trim().toLowerCase();
 
   // Validaciones
-  if (!tipo_identificacion) return res.status(400).json({ message: 'El tipo de identificación es obligatorio.' });
-  if (!identificacion) return res.status(400).json({ message: 'La identificación es obligatoria.' });
-  if (!PATRON_IDENT.test(identificacion))
-    return res.status(400).json({ message: 'La identificación solo admite letras, números, puntos o guiones.' });
-  if (identificacion.length > MAX_LEN_STR)
-    return res.status(400).json({ message: `La identificación admite máximo ${MAX_LEN_STR} caracteres.` });
+  if (!id_tipo_identificacion) {
+    return res
+      .status(400)
+      .json({ message: "El tipo de identificación es obligatorio." });
+  }
+  if (!identificacion_usuario) {
+    return res
+      .status(400)
+      .json({ message: "La identificación es obligatoria." });
+  }
+  if (!PATRON_IDENT.test(identificacion_usuario)) {
+    return res.status(400).json({
+      message:
+        "La identificación solo admite letras, números, puntos o guiones.",
+    });
+  }
+  if (identificacion_usuario.length > MAX_LEN_STR) {
+    return res.status(400).json({
+      message: `La identificación admite máximo ${MAX_LEN_STR} caracteres.`,
+    });
+  }
 
-  if (!nombre || !PATRON_NOMBRE.test(nombre))
-    return res.status(400).json({ message: 'El nombre solo puede contener letras, espacios, guiones y puntos.' });
-  if (nombre.length > MAX_LEN_STR)
-    return res.status(400).json({ message: `El nombre admite máximo ${MAX_LEN_STR} caracteres.` });
+  if (!nombres_usuario || !PATRON_NOMBRE.test(nombres_usuario)) {
+    return res.status(400).json({
+      message:
+        "El nombre solo puede contener letras, espacios, guiones y puntos.",
+    });
+  }
+  if (nombres_usuario.length > MAX_LEN_STR) {
+    return res.status(400).json({
+      message: `El nombre admite máximo ${MAX_LEN_STR} caracteres.`,
+    });
+  }
 
-  if (!apellido1 || !PATRON_NOMBRE.test(apellido1))
-    return res.status(400).json({ message: 'El apellido 1 solo puede contener letras, espacios, guiones y puntos.' });
-  if (apellido1.length > MAX_LEN_STR || (apellido2 && apellido2.length > MAX_LEN_STR))
-    return res.status(400).json({ message: `Los apellidos admiten máximo ${MAX_LEN_STR} caracteres.` });
-  if (apellido2 && !PATRON_NOMBRE.test(apellido2))
-    return res.status(400).json({ message: 'El apellido 2 solo puede contener letras, espacios, guiones y puntos.' });
+  if (!apellido1_usuario || !PATRON_NOMBRE.test(apellido1_usuario)) {
+    return res.status(400).json({
+      message:
+        "El apellido 1 solo puede contener letras, espacios, guiones y puntos.",
+    });
+  }
+  if (
+    apellido1_usuario.length > MAX_LEN_STR ||
+    (apellido2_usuario && apellido2_usuario.length > MAX_LEN_STR)
+  ) {
+    return res.status(400).json({
+      message: `Los apellidos admiten máximo ${MAX_LEN_STR} caracteres.`,
+    });
+  }
+  if (apellido2_usuario && !PATRON_NOMBRE.test(apellido2_usuario)) {
+    return res.status(400).json({
+      message:
+        "El apellido 2 solo puede contener letras, espacios, guiones y puntos.",
+    });
+  }
 
-  if (!correo || !PATRON_EMAIL.test(correo))
-    return res.status(400).json({ message: 'Formato de correo inválido.' });
+  if (!email_usuario || !PATRON_EMAIL.test(email_usuario)) {
+    return res.status(400).json({ message: "Formato de correo inválido." });
+  }
 
-  if (!contrasennia || String(contrasennia).length < 3)
-    return res.status(400).json({ message: 'La contraseña debe tener al menos 3 caracteres.' });
+  if (!password || String(password).length < 3) {
+    return res.status(400).json({
+      message: "La contraseña debe tener al menos 3 caracteres.",
+    });
+  }
 
-  if (!perfil_id) return res.status(400).json({ message: 'Debes seleccionar un perfil.' });
-  if (!perfil_rol) return res.status(400).json({ message: 'Debes seleccionar un rol.' });
+  if (!id_rol) {
+    return res.status(400).json({ message: "Debes seleccionar un rol." });
+  }
 
-  let connection;
   try {
-    connection = await getConnection();
+    // Validar que el tipo de identificación existe
+    if (!(await existeTipoIdentificacionPorId(id_tipo_identificacion))) {
+      return res
+        .status(400)
+        .json({ message: "El tipo de identificación seleccionado no existe." });
+    }
 
-    // Unicidades
-    if (await existeUsuarioPorIdent(connection, identificacion)) {
+    // Validar que el rol existe
+    if (!(await existeRolPorId(id_rol))) {
+      return res
+        .status(400)
+        .json({ message: "El rol seleccionado no existe." });
+    }
+
+    // Unicidad de identificación
+    if (await existeUsuarioPorIdent(identificacion_usuario)) {
       return res.status(409).json({
-        code: 'DUP_IDENT',
-        field: 'identificacion',
-        message: 'Ya existe un usuario con esa identificación.',
+        code: "DUP_IDENT",
+        field: "identificacion_usuario",
+        message: "Ya existe un usuario con esa identificación.",
       });
     }
-    if (await existeUsuarioPorEmail(connection, correo)) {
+
+    // Unicidad de email
+    if (await existeUsuarioPorEmail(email_usuario)) {
       return res.status(409).json({
-        code: 'DUP_EMAIL',
-        field: 'correo',
-        message: 'Ya existe un usuario con ese correo.',
+        code: "DUP_EMAIL",
+        field: "email_usuario",
+        message: "Ya existe un usuario con ese correo.",
       });
     }
 
-    // Existencias (sin cruzar)
-    if (!(await existePerfilPorId(connection, perfil_id))) {
-      return res.status(400).json({ message: 'El perfil seleccionado no existe.' });
-    }
-    if (!(await existeRolPorId(connection, perfil_rol))) {
-      return res.status(400).json({ message: 'El rol seleccionado no existe.' });
-    }
+    // Hash de contraseña con bcrypt
+    const hash_password = await bcrypt.hash(password, 10);
 
-    await connection.execute(
-      `INSERT INTO USUARIOS (
-         DATOS_PERSONALES,
-         CONTRASENNIA_USUARIO,
-         PERFIL_USUARIO,
-         PERFIL_ROL_USUARIO
-       ) VALUES (
-         PersonaBase(:tipo, :ident, :nombre, :ap1, :ap2, :email),
-         :pwd,
-         :pid,
-         :prol
-       )`,
-      {
-        tipo: tipo_identificacion,
-        ident: identificacion,
-        nombre,
-        ap1: apellido1,
-        ap2: apellido2,
-        email: correo,
-        pwd: contrasennia, // sin hash, como pediste
-        pid: perfil_id,
-        prol: perfil_rol,
-      },
-      { autoCommit: true }
-    );
+    // Insertar usuario
+    await db("usuarios").insert({
+      id_tipo_identificacion,
+      identificacion_usuario,
+      nombres_usuario,
+      apellido1_usuario,
+      apellido2_usuario: apellido2_usuario || null,
+      email_usuario,
+      hash_password_usuario: hash_password,
+      id_rol,
+      activo: true,
+    });
 
-    res.status(201).json({ message: 'Usuario creado correctamente.' });
+    res.status(201).json({ message: "Usuario creado correctamente." });
   } catch (error) {
-    console.error('Error al crear usuario:', error);
-    res.status(500).json({ message: 'Error al crear usuario.' });
-  } finally {
-    if (connection) await connection.close();
+    console.error("Error al crear usuario:", error);
+
+    // Error de constraint UNIQUE en PostgreSQL
+    if (error && error.code === "23505") {
+      if (error.constraint === "usuarios_email_usuario_key") {
+        return res.status(409).json({
+          code: "DUP_EMAIL",
+          field: "email_usuario",
+          message: "Ya existe un usuario con ese correo.",
+        });
+      }
+      if (error.constraint === "usuarios_pkey") {
+        return res.status(409).json({
+          code: "DUP_IDENT",
+          field: "identificacion_usuario",
+          message: "Ya existe un usuario con esa identificación.",
+        });
+      }
+    }
+
+    res.status(500).json({ message: "Error al crear usuario." });
   }
 };
 
 /* ===========================
    ACTUALIZAR
-   =========================== */
-/* ===========================
-   ACTUALIZAR (permite cambiar tipo/ident)
    =========================== */
 export const actualizarUsuario = async (req, res) => {
   // Valores ACTUALES (antes de editar) que llegan por la URL
@@ -243,189 +291,262 @@ export const actualizarUsuario = async (req, res) => {
 
   // Valores NUEVOS (lo que escribió la persona en el formulario)
   let {
-    tipo_identificacion,      // nuevo tipo
-    identificacion,           // nueva identificación
-    nombre,
-    apellido1,
-    apellido2,
-    correo,
-    contrasennia,             // opcional: si viene y tiene >=3, se actualiza
-    perfil_id,
-    perfil_rol,
+    id_tipo_identificacion, // nuevo tipo
+    identificacion_usuario, // nueva identificación
+    nombres_usuario,
+    apellido1_usuario,
+    apellido2_usuario,
+    email_usuario,
+    password, // opcional: si viene y tiene >=3, se actualiza
+    id_rol,
   } = req.body;
 
-  // -------- Normalización / validaciones espejo (igual que en crear) --------
-  const collapseSpaces = (s) => (typeof s === 'string' ? s.trim().replace(/\s+/g, ' ') : '');
-  const MAX_LEN_STR = 100;
-  const PATRON_NOMBRE = /^[A-Za-zÁÉÍÓÚáéíóúÑñ\s\-.]+$/;
-  const PATRON_IDENT = /^[A-Za-z0-9.\-]+$/;  // sin espacios
-  const PATRON_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i;
+  // Normalización
+  identificacion_usuario = (identificacion_usuario ?? "").trim();
+  nombres_usuario = collapseSpaces(nombres_usuario ?? "");
+  apellido1_usuario = collapseSpaces(apellido1_usuario ?? "");
+  apellido2_usuario = collapseSpaces(apellido2_usuario ?? "");
+  email_usuario = (email_usuario ?? "").trim().toLowerCase();
 
-  nombre = collapseSpaces(nombre ?? '');
-  apellido1 = collapseSpaces(apellido1 ?? '');
-  apellido2 = collapseSpaces(apellido2 ?? '');
-  correo = (correo ?? '').trim().toLowerCase();
+  // Validaciones (iguales que en crear)
+  if (!id_tipo_identificacion) {
+    return res
+      .status(400)
+      .json({ message: "El tipo de identificación es obligatorio." });
+  }
+  if (!identificacion_usuario) {
+    return res
+      .status(400)
+      .json({ message: "La identificación es obligatoria." });
+  }
+  if (!PATRON_IDENT.test(identificacion_usuario)) {
+    return res.status(400).json({
+      message:
+        "La identificación solo admite letras, números, puntos o guiones.",
+    });
+  }
+  if (identificacion_usuario.length > MAX_LEN_STR) {
+    return res.status(400).json({
+      message: `La identificación admite máximo ${MAX_LEN_STR} caracteres.`,
+    });
+  }
 
-  if (!tipo_identificacion) return res.status(400).json({ message: 'El tipo de identificación es obligatorio.' });
-  if (!identificacion) return res.status(400).json({ message: 'La identificación es obligatoria.' });
-  if (!PATRON_IDENT.test(identificacion))
-    return res.status(400).json({ message: 'La identificación solo admite letras, números, puntos o guiones.' });
-  if (identificacion.length > MAX_LEN_STR)
-    return res.status(400).json({ message: `La identificación admite máximo ${MAX_LEN_STR} caracteres.` });
+  if (!nombres_usuario || !PATRON_NOMBRE.test(nombres_usuario)) {
+    return res.status(400).json({
+      message:
+        "El nombre solo puede contener letras, espacios, guiones y puntos.",
+    });
+  }
+  if (nombres_usuario.length > MAX_LEN_STR) {
+    return res.status(400).json({
+      message: `El nombre admite máximo ${MAX_LEN_STR} caracteres.`,
+    });
+  }
 
-  if (!nombre || !PATRON_NOMBRE.test(nombre))
-    return res.status(400).json({ message: 'El nombre solo puede contener letras, espacios, guiones y puntos.' });
-  if (nombre.length > MAX_LEN_STR)
-    return res.status(400).json({ message: `El nombre admite máximo ${MAX_LEN_STR} caracteres.` });
+  if (!apellido1_usuario || !PATRON_NOMBRE.test(apellido1_usuario)) {
+    return res.status(400).json({
+      message:
+        "El apellido 1 solo puede contener letras, espacios, guiones y puntos.",
+    });
+  }
+  if (
+    apellido1_usuario.length > MAX_LEN_STR ||
+    (apellido2_usuario && apellido2_usuario.length > MAX_LEN_STR)
+  ) {
+    return res.status(400).json({
+      message: `Los apellidos admiten máximo ${MAX_LEN_STR} caracteres.`,
+    });
+  }
+  if (apellido2_usuario && !PATRON_NOMBRE.test(apellido2_usuario)) {
+    return res.status(400).json({
+      message:
+        "El apellido 2 solo puede contener letras, espacios, guiones y puntos.",
+    });
+  }
 
-  if (!apellido1 || !PATRON_NOMBRE.test(apellido1))
-    return res.status(400).json({ message: 'El apellido 1 solo puede contener letras, espacios, guiones y puntos.' });
-  if (apellido1.length > MAX_LEN_STR || (apellido2 && apellido2.length > MAX_LEN_STR))
-    return res.status(400).json({ message: `Los apellidos admiten máximo ${MAX_LEN_STR} caracteres.` });
-  if (apellido2 && !PATRON_NOMBRE.test(apellido2))
-    return res.status(400).json({ message: 'El apellido 2 solo puede contener letras, espacios, guiones y puntos.' });
+  if (!email_usuario || !PATRON_EMAIL.test(email_usuario)) {
+    return res.status(400).json({ message: "Formato de correo inválido." });
+  }
 
-  if (!correo || !PATRON_EMAIL.test(correo))
-    return res.status(400).json({ message: 'Formato de correo inválido.' });
-  if (contrasennia && String(contrasennia).length > 0 && String(contrasennia).length < 3)
-    return res.status(400).json({ message: 'La contraseña debe tener al menos 3 caracteres.' });
+  if (password && String(password).length > 0 && String(password).length < 3) {
+    return res.status(400).json({
+      message: "La contraseña debe tener al menos 3 caracteres.",
+    });
+  }
 
-  if (!perfil_id) return res.status(400).json({ message: 'Debes seleccionar un perfil.' });
-  if (!perfil_rol) return res.status(400).json({ message: 'Debes seleccionar un rol.' });
+  if (!id_rol) {
+    return res.status(400).json({ message: "Debes seleccionar un rol." });
+  }
 
-  let connection;
   try {
-    connection = await getConnection();
+    // 1) Verificar que el usuario ACTUAL existe (por los valores de la URL)
+    const existe = await db("usuarios")
+      .where({
+        id_tipo_identificacion: tipoActual,
+        identificacion_usuario: idActual,
+      })
+      .first();
 
-    // 1) Verifica que el usuario ACTUAL exista (por los valores de la URL)
-    const existe = await connection.execute(
-      `SELECT 1
-         FROM USUARIOS
-        WHERE TREAT(DATOS_PERSONALES AS PersonaBase).TIPO_IDENTIFICACION_USUARIO = :t
-          AND TREAT(DATOS_PERSONALES AS PersonaBase).IDENTIFICACION_USUARIO      = :i
-        FETCH FIRST 1 ROWS ONLY`,
-      { t: tipoActual, i: idActual }
-    );
-    if (existe.rows.length === 0) {
-      return res.status(404).json({ message: 'El usuario no existe.' });
+    if (!existe) {
+      return res.status(404).json({ message: "El usuario no existe." });
     }
 
-    // 2) Si cambió la identificación, valida que la NUEVA no exista (PK es la identificación)
-    if (identificacion !== idActual) {
-      const dupId = await connection.execute(
-        `SELECT 1
-           FROM USUARIOS u
-          WHERE TREAT(u.DATOS_PERSONALES AS PersonaBase).IDENTIFICACION_USUARIO = :id
-          FETCH FIRST 1 ROWS ONLY`,
-        { id: identificacion }
-      );
-      if (dupId.rows.length > 0) {
+    // 2) Validar que el tipo de identificación existe
+    if (!(await existeTipoIdentificacionPorId(id_tipo_identificacion))) {
+      return res
+        .status(400)
+        .json({ message: "El tipo de identificación seleccionado no existe." });
+    }
+
+    // 3) Validar que el rol existe
+    if (!(await existeRolPorId(id_rol))) {
+      return res
+        .status(400)
+        .json({ message: "El rol seleccionado no existe." });
+    }
+
+    // 4) Si cambió la identificación, validar que la NUEVA no exista
+    if (
+      identificacion_usuario !== idActual ||
+      id_tipo_identificacion !== parseInt(tipoActual)
+    ) {
+      if (await existeUsuarioPorIdent(identificacion_usuario)) {
         return res.status(409).json({
-          code: 'DUP_IDENT',
-          field: 'identificacion',
-          message: 'Ya existe un usuario con esa identificación.',
+          code: "DUP_IDENT",
+          field: "identificacion_usuario",
+          message: "Ya existe un usuario con esa identificación.",
         });
       }
     }
 
-    // 3) Unicidad de correo (excluyendo al usuario ACTUAL por su identificación actual)
-    const dupMail = await connection.execute(
-      `SELECT 1
-         FROM USUARIOS u
-        WHERE LOWER(TREAT(u.DATOS_PERSONALES AS PersonaBase).EMAIL_USUARIO) = LOWER(:e)
-          AND TREAT(u.DATOS_PERSONALES AS PersonaBase).IDENTIFICACION_USUARIO <> :ex
-        FETCH FIRST 1 ROWS ONLY`,
-      { e: correo, ex: idActual }
-    );
-    if (dupMail.rows.length > 0) {
+    // 5) Unicidad de email (excluyendo al usuario ACTUAL)
+    if (await existeUsuarioPorEmail(email_usuario, tipoActual, idActual)) {
       return res.status(409).json({
-        code: 'DUP_EMAIL',
-        field: 'correo',
-        message: 'Ya existe un usuario con ese correo.',
+        code: "DUP_EMAIL",
+        field: "email_usuario",
+        message: "Ya existe un usuario con ese correo.",
       });
     }
 
-    // 4) Existencia de perfil y de rol
-    const [okPerfil, okRol] = await Promise.all([
-      connection.execute(`SELECT 1 FROM PERFILES WHERE ID_PERFIL = :p FETCH FIRST 1 ROWS ONLY`, { p: perfil_id }),
-      connection.execute(`SELECT 1 FROM ROLES    WHERE ID_ROL    = :r FETCH FIRST 1 ROWS ONLY`, { r: perfil_rol }),
-    ]);
-    if (okPerfil.rows.length === 0) return res.status(400).json({ message: 'El perfil seleccionado no existe.' });
-    if (okRol.rows.length === 0) return res.status(400).json({ message: 'El rol seleccionado no existe.' });
-
-    // 5) SET dinámico para contraseña opcional
-    let setPwdSql = '';
-    const binds = {
-      // NUEVOS valores (se grabarán en la fila)
-      tipoNuevo: tipo_identificacion,
-      idNuevo: identificacion,
-      nombre,
-      ap1: apellido1,
-      ap2: apellido2,
-      email: correo,
-      pid: perfil_id,
-      prol: perfil_rol,
-      // Valores ACTUALES para ubicar la fila
-      tipoActual,
-      idActual,
+    // 6) Preparar datos a actualizar
+    const datosActualizar = {
+      id_tipo_identificacion,
+      identificacion_usuario,
+      nombres_usuario,
+      apellido1_usuario,
+      apellido2_usuario: apellido2_usuario || null,
+      email_usuario,
+      id_rol,
     };
-    if (contrasennia && String(contrasennia).trim().length >= 3) {
-      setPwdSql = `, CONTRASENNIA_USUARIO = :pwd`;
-      binds.pwd = contrasennia; // (sin hash por ahora)
+
+    // 7) Si viene contraseña, hashearla y agregarla
+    if (password && String(password).trim().length >= 3) {
+      const hash_password = await bcrypt.hash(password, 10);
+      datosActualizar.hash_password_usuario = hash_password;
     }
 
-    const sql = `
-      UPDATE USUARIOS
-         SET DATOS_PERSONALES = PersonaBase(:tipoNuevo, :idNuevo, :nombre, :ap1, :ap2, :email)
-             ${setPwdSql},
-             PERFIL_USUARIO     = :pid,
-             PERFIL_ROL_USUARIO = :prol
-       WHERE TREAT(DATOS_PERSONALES AS PersonaBase).TIPO_IDENTIFICACION_USUARIO = :tipoActual
-         AND TREAT(DATOS_PERSONALES AS PersonaBase).IDENTIFICACION_USUARIO      = :idActual
-    `;
+    // 8) UPDATE (importante: PostgreSQL no permite cambiar la PK directamente)
+    // Si cambió tipo o identificación, hay que DELETE + INSERT
+    const cambioEnPK =
+      identificacion_usuario !== idActual ||
+      id_tipo_identificacion !== parseInt(tipoActual);
 
-    const result = await connection.execute(sql, binds, { autoCommit: true });
-    if (result.rowsAffected === 0) {
-      return res.status(404).json({ message: 'El usuario no existe.' });
+    if (cambioEnPK) {
+      // Usar transacción para DELETE + INSERT
+      await db.transaction(async (trx) => {
+        // Eliminar el registro anterior
+        await trx("usuarios")
+          .where({
+            id_tipo_identificacion: tipoActual,
+            identificacion_usuario: idActual,
+          })
+          .delete();
+
+        // Insertar con la nueva PK
+        await trx("usuarios").insert(datosActualizar);
+      });
+    } else {
+      // Actualización normal (sin cambio de PK)
+      const rowsAffected = await db("usuarios")
+        .where({
+          id_tipo_identificacion: tipoActual,
+          identificacion_usuario: idActual,
+        })
+        .update(datosActualizar);
+
+      if (rowsAffected === 0) {
+        return res.status(404).json({ message: "El usuario no existe." });
+      }
     }
 
-    res.json({ message: 'Usuario actualizado correctamente.' });
+    res.json({ message: "Usuario actualizado correctamente." });
   } catch (error) {
-    console.error('Error al actualizar usuario:', error);
-    res.status(500).json({ message: 'Error al actualizar usuario.' });
-  } finally {
-    if (connection) await connection.close();
+    console.error("Error al actualizar usuario:", error);
+
+    // Error de constraint UNIQUE en PostgreSQL
+    if (error && error.code === "23505") {
+      if (error.constraint === "usuarios_email_usuario_key") {
+        return res.status(409).json({
+          code: "DUP_EMAIL",
+          field: "email_usuario",
+          message: "Ya existe un usuario con ese correo.",
+        });
+      }
+      if (error.constraint === "usuarios_pkey") {
+        return res.status(409).json({
+          code: "DUP_IDENT",
+          field: "identificacion_usuario",
+          message: "Ya existe un usuario con esa identificación.",
+        });
+      }
+    }
+
+    // Error de FK en ventas/compras
+    if (error && error.code === "23503") {
+      return res.status(409).json({
+        code: "USER_REFERENCED",
+        message:
+          "No se puede cambiar la identificación porque el usuario tiene ventas o compras asociadas.",
+      });
+    }
+
+    res.status(500).json({ message: "Error al actualizar usuario." });
   }
 };
-
 
 /* ===========================
    ELIMINAR
    =========================== */
 export const eliminarUsuario = async (req, res) => {
   const { tipo, id } = req.params;
-  let connection;
+
   try {
-    connection = await getConnection();
+    const rowsAffected = await db("usuarios")
+      .where({
+        id_tipo_identificacion: tipo,
+        identificacion_usuario: id,
+      })
+      .delete();
 
-    const result = await connection.execute(
-      `DELETE FROM USUARIOS
-        WHERE TREAT(DATOS_PERSONALES AS PersonaBase).TIPO_IDENTIFICACION_USUARIO = :t
-          AND TREAT(DATOS_PERSONALES AS PersonaBase).IDENTIFICACION_USUARIO = :i`,
-      { t: tipo, i: id },
-      { autoCommit: true }
-    );
-
-    if (result.rowsAffected === 0) {
-      return res.status(404).json({ message: 'El usuario no existe.' });
+    if (rowsAffected === 0) {
+      return res.status(404).json({ message: "El usuario no existe." });
     }
 
-    res.json({ message: 'Usuario eliminado correctamente.' });
+    res.json({ message: "Usuario eliminado correctamente." });
   } catch (error) {
-    console.error('Error al eliminar usuario:', error);
-    res.status(500).json({ message: 'Error al eliminar usuario.' });
-  } finally {
-    if (connection) await connection.close();
+    console.error("Error al eliminar usuario:", error);
+
+    // Error de FK (usuario referenciado en ventas/compras)
+    if (error && error.code === "23503") {
+      return res.status(409).json({
+        code: "USER_IN_USE",
+        message:
+          "No se puede eliminar el usuario porque tiene ventas o compras asociadas. " +
+          "Considera desactivarlo en lugar de eliminarlo.",
+        requiresDeactivation: true,
+      });
+    }
+
+    res.status(500).json({ message: "Error al eliminar usuario." });
   }
 };
-
