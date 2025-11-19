@@ -19,7 +19,7 @@ import usuariosRoutes from "./routes/usuarios.routes.js";
 // RUTAS PENDIENTES DE MIGRAR ⏳
 // (Comentadas temporalmente hasta migrar sus controladores)
 // ============================================
-// import authRoutes from './routes/auth.routes.js';
+import authRoutes from "./routes/auth.routes.js";
 // import productosRoutes from './routes/productos.routes.js';
 // import ventasRoutes from './routes/ventas.routes.js';
 // import comprasRoutes from './routes/compras.routes.js';
@@ -47,7 +47,7 @@ app.use("/api", usuariosRoutes);
 // ============================================
 // RUTAS COMENTADAS (PENDIENTES DE MIGRACIÓN) ⏳
 // ============================================
-// app.use("/api", authRoutes);
+app.use("/api", authRoutes);
 // app.use("/api", productosRoutes);
 // app.use("/api", ventasRoutes);
 // app.use('/api', comprasRoutes);
@@ -64,5 +64,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor activo en http://localhost:${PORT}`);
   console.log(`📊 Base de datos: PostgreSQL`);
-  console.log(`🔧 Controladores migrados: 7/12 (usuarios ✅)`);
+  console.log(`🔧 Controladores migrados: 8/12 (auth ✅)`);
 });

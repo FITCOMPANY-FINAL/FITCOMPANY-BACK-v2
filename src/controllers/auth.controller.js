@@ -1,6 +1,7 @@
-import { getConnection } from '../config/db.js';
-import jwt from 'jsonwebtoken';
-import dotenv from 'dotenv';
+import db from "../config/db.js";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcrypt";
+import dotenv from "dotenv";
 
 dotenv.config();
 
@@ -8,132 +9,138 @@ export const login = async (req, res) => {
   const { correo, password } = req.body;
 
   try {
-    const connection = await getConnection();
-
     // Limpiar y normalizar el correo para evitar errores de espacios o mayúsculas
     const correoLimpio = correo.trim().toLowerCase();
 
-    // 🔍 Logs para depuración
-    console.log("🔐 Intento de login:");
-    console.log("Correo recibido:", correo);
-    console.log("Correo limpio:", correoLimpio);
-    console.log("Password recibido:", password);
+    console.log("🔐 Intento de login para:", correoLimpio);
 
-    // Buscar el usuario en la base de datos
-const result = await connection.execute(
-  `SELECT 
-    TREAT(U.DATOS_PERSONALES AS PersonaBase).TIPO_IDENTIFICACION_USUARIO AS tipo_id,
-    TREAT(U.DATOS_PERSONALES AS PersonaBase).IDENTIFICACION_USUARIO AS identificacion,
-    U.CONTRASENNIA_USUARIO,
-    TREAT(U.DATOS_PERSONALES AS PersonaBase).NOMBRE_USUARIO AS nombre,
-    TREAT(U.DATOS_PERSONALES AS PersonaBase).APELLIDO1_USUARIO AS apellido1,
-    TREAT(U.DATOS_PERSONALES AS PersonaBase).APELLIDO2_USUARIO AS apellido2,
-    TREAT(U.DATOS_PERSONALES AS PersonaBase).EMAIL_USUARIO AS correo,
-    R.NOMBRE_ROL,
-    U.PERFIL_USUARIO,
-    U.PERFIL_ROL_USUARIO
-  FROM USUARIOS U
-  JOIN ROLES R ON U.PERFIL_ROL_USUARIO = R.ID_ROL
-  WHERE LOWER(TREAT(U.DATOS_PERSONALES AS PersonaBase).EMAIL_USUARIO) = :correo`,
-  [correoLimpio]
-);
-
-    // 🔍 Log de resultados
-    console.log("Resultado consulta:", result.rows);
+    // Buscar el usuario en la base de datos con JOIN a roles y tipos_identificacion
+    const usuario = await db("usuarios as u")
+      .join("roles as r", "u.id_rol", "r.id_rol")
+      .join(
+        "tipos_identificacion as ti",
+        "u.id_tipo_identificacion",
+        "ti.id_tipo_identificacion",
+      )
+      .select(
+        "u.id_tipo_identificacion",
+        "u.identificacion_usuario",
+        "u.nombres_usuario",
+        "u.apellido1_usuario",
+        "u.apellido2_usuario",
+        "u.email_usuario",
+        "u.hash_password_usuario",
+        "u.id_rol",
+        "r.nombre_rol",
+        "ti.nombre_tipo_identificacion",
+      )
+      .where(db.raw("LOWER(u.email_usuario)"), correoLimpio)
+      .where("u.activo", true) // Solo usuarios activos
+      .first();
 
     // Si no se encuentra el usuario
-    if (result.rows.length === 0) {
-      console.log("❌ No se encontró ningún usuario con ese correo");
-      return res.status(401).json({ message: 'Correo o contraseña incorrectos.' });
+    if (!usuario) {
+      console.log("❌ No se encontró usuario activo con ese correo");
+      return res
+        .status(401)
+        .json({ message: "Correo o contraseña incorrectos." });
     }
 
-    // Extraer datos del usuario
-    const [
-      tipo,
-      identificacion,
-      password_db,
-      nombre,
-      apellido1,
-      apellido2,
-      correoDB,
-      rol,
-      perfil_id,
-      perfil_rol
-    ] = result.rows[0];
-
-    // 🔍 Validar la contraseña
-    console.log("Contraseña esperada:", password_db);
-
-    if (password !== password_db) {
-      console.log("❌ Contraseña incorrecta");
-      return res.status(401).json({ message: 'Correo o contraseña incorrectos.' });
-    }
-
-    // ✅ Confirmación
-    console.log("✅ Login exitoso para:", correoDB);
-
-    // Obtener formularios con sus permisos
-    const permisosResult = await connection.execute(
-      `SELECT 
-         F.CODIGO_FORMULARIO,
-         F.TITULO_FORMULARIO,
-         F.URL_FORMULARIO,
-         F.ES_PADRE,
-         F.ORDEN,
-         F.PADRE_FORMULARIO,
-         P.PUEDE_CREAR,
-         P.PUEDE_LEER,
-         P.PUEDE_ACTUALIZAR,
-         P.PUEDE_ELIMINAR
-       FROM FORMULARIOS F
-       JOIN PERMISOS P ON F.CODIGO_FORMULARIO = P.CODIGO_FORMULARIO
-       WHERE P.ID_PERFIL = :perfil_id AND P.PERFIL_ROL = :perfil_rol
-       ORDER BY F.ES_PADRE DESC, F.ORDEN ASC`,
-      [perfil_id, perfil_rol]
+    // Validar la contraseña con bcrypt
+    const passwordValido = await bcrypt.compare(
+      password,
+      usuario.hash_password_usuario,
     );
 
-    // Convertir a arreglo de objetos JS
-    const formularios = permisosResult.rows.map(row => ({
-      codigo: row[0],
-      titulo: row[1],
-      url: row[2],
-      es_padre: row[3],
-      orden: row[4],
-      padre: row[5],
+    if (!passwordValido) {
+      console.log("❌ Contraseña incorrecta");
+      return res
+        .status(401)
+        .json({ message: "Correo o contraseña incorrectos." });
+    }
+
+    console.log("✅ Credenciales válidas para:", usuario.email_usuario);
+
+    // Obtener formularios asociados al rol del usuario
+    const formularios = await db("formularios as f")
+      .join("roles_formularios as rf", "f.id_formulario", "rf.id_formulario")
+      .select(
+        "f.id_formulario",
+        "f.titulo_formulario",
+        "f.url_formulario",
+        "f.is_padre",
+        "f.orden_formulario",
+        "f.padre_id",
+      )
+      .where("rf.id_rol", usuario.id_rol)
+      .orderBy([
+        { column: "f.is_padre", order: "desc" },
+        { column: "f.orden_formulario", order: "asc" },
+      ]);
+
+    // Mapear formularios a estructura esperada
+    // Como los permisos son simples: si existe en roles_formularios = CRUD completo
+    const formulariosMapeados = formularios.map((f) => ({
+      id: f.id_formulario,
+      titulo: f.titulo_formulario,
+      url: f.url_formulario,
+      es_padre: f.is_padre,
+      orden: f.orden_formulario,
+      padre: f.padre_id,
       permisos: {
-        crear: row[6],
-        leer: row[7],
-        actualizar: row[8],
-        eliminar: row[9]
-      }
+        crear: true,
+        leer: true,
+        actualizar: true,
+        eliminar: true,
+      },
     }));
 
-    // Crear el token JWT con toda la info útil
-    const token = jwt.sign(
-      {
-        tipo,
-        identificacion,
-        nombre,
-        apellido1,
-        apellido2: apellido2 ?? '',
-        correo: correoDB,
-        rol,
-        perfil_id,
-        perfil_rol,
-        formularios // menú dinámico desde acá
-      },
-      process.env.jwt_secret,
-      { expiresIn: '8h' }
+    console.log(
+      `✅ Usuario tiene acceso a ${formulariosMapeados.length} formularios`,
     );
 
-    // Cerrar conexión
-    await connection.close();
+    // Crear el token JWT
+    const token = jwt.sign(
+      {
+        tipo_id: usuario.id_tipo_identificacion,
+        identificacion: usuario.identificacion_usuario,
+        nombres: usuario.nombres_usuario,
+        apellido1: usuario.apellido1_usuario,
+        apellido2: usuario.apellido2_usuario || "",
+        email: usuario.email_usuario,
+        id_rol: usuario.id_rol,
+        nombre_rol: usuario.nombre_rol,
+        tipo_identificacion: usuario.nombre_tipo_identificacion,
+        formularios: formulariosMapeados,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "8h" },
+    );
 
-    // Devolver token
-    res.json({ token });
+    console.log("✅ Token JWT generado exitosamente");
 
+    // Devolver token + datos del usuario
+    res.json({
+      token,
+      usuario: {
+        tipo_id: usuario.id_tipo_identificacion,
+        identificacion: usuario.identificacion_usuario,
+        nombres: usuario.nombres_usuario,
+        apellido1: usuario.apellido1_usuario,
+        apellido2: usuario.apellido2_usuario || "",
+        email: usuario.email_usuario,
+        tipo_identificacion: usuario.nombre_tipo_identificacion,
+        rol: {
+          id_rol: usuario.id_rol,
+          nombre_rol: usuario.nombre_rol,
+        },
+        formularios: formulariosMapeados,
+      },
+    });
   } catch (error) {
-    console.error('Error en login:', error);
-    res.status(500).json({ message: 'Error en el servidor al intentar iniciar sesión.' });
+    console.error("❌ Error en login:", error);
+    res
+      .status(500)
+      .json({ message: "Error en el servidor al intentar iniciar sesión." });
   }
 };
