@@ -1,19 +1,23 @@
-import { Router } from 'express';
+import { Router } from "express";
 import {
-  registrarCompra,
-  obtenerCompras,
+  listarCompras,
+  obtenerCompraPorId,
+  crearCompra,
   eliminarCompra,
-  actualizarCompra
-} from '../controllers/compras.controller.js';
-import { authRequired } from '../middlewares/authMiddleware.js';
+} from "../controllers/compras.controller.js";
+import { authRequired } from "../middlewares/authMiddleware.js";
 
 const router = Router();
 
-router.get('/compras', obtenerCompras);
+// Rutas públicas (o con auth opcional)
+router.get("/compras", listarCompras);
+router.get("/compras/:id", obtenerCompraPorId);
 
-// Los que escriben requieren usuario autenticado
-router.post('/compras', authRequired, registrarCompra);
-router.put('/compras/:id', authRequired, actualizarCompra);
-router.delete('/compras/:id', authRequired, eliminarCompra);
+// Rutas protegidas (requieren autenticación JWT)
+router.post("/compras", authRequired, crearCompra);
+router.delete("/compras/:id", authRequired, eliminarCompra);
+
+// NO implementamos PUT (actualizar compra) por simplicidad
+// Si se necesita modificar: eliminar y crear nueva
 
 export default router;
