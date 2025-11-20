@@ -103,6 +103,7 @@ function validarPayloadProducto(p) {
       message: "El precio de venta no puede ser menor que el precio de costo.",
     };
 
+  
   // Validaciones de stock
   for (const [campo, valor] of [
     ["stock_actual", p.stock_actual],
