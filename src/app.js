@@ -11,19 +11,18 @@ import categoriasRoutes from "./routes/categorias.routes.js";
 import unidadesMedidasRoutes from "./routes/unidadesMedidas.routes.js";
 import tipoIdentificacionRoutes from "./routes/tipoIdentificacion.routes.js";
 import rolesRoutes from "./routes/roles.routes.js";
+import formulariosRoutes from "./routes/formularios.routes.js";
+import permisosRoutes from "./routes/permisos.routes.js";
+import usuariosRoutes from "./routes/usuarios.routes.js";
 
 // ============================================
 // RUTAS PENDIENTES DE MIGRAR ⏳
 // (Comentadas temporalmente hasta migrar sus controladores)
 // ============================================
-// import authRoutes from './routes/auth.routes.js';
-// import productosRoutes from './routes/productos.routes.js';
-// import perfilesRoutes from './routes/perfiles.routes.js';
-// import usuariosRoutes from './routes/usuarios.routes.js';
+import authRoutes from "./routes/auth.routes.js";
+import productosRoutes from "./routes/productos.routes.js";
+import comprasRoutes from "./routes/compras.routes.js";
 // import ventasRoutes from './routes/ventas.routes.js';
-// import comprasRoutes from './routes/compras.routes.js';
-// import permisosRoutes from './routes/permisos.routes.js';
-// import formulariosRoutes from './routes/formularios.routes.js';
 // import reportesRoutes from "./routes/reportes.routes.js";
 
 const app = express();
@@ -41,18 +40,17 @@ app.use("/api", categoriasRoutes);
 app.use("/api", unidadesMedidasRoutes);
 app.use("/api", tipoIdentificacionRoutes);
 app.use("/api", rolesRoutes);
+app.use("/api", formulariosRoutes);
+app.use("/api", permisosRoutes);
+app.use("/api", usuariosRoutes);
 
 // ============================================
 // RUTAS COMENTADAS (PENDIENTES DE MIGRACIÓN) ⏳
 // ============================================
-// app.use("/api", authRoutes);
-// app.use("/api", productosRoutes);
-// app.use("/api", perfilesRoutes);
-// app.use("/api", usuariosRoutes);
+app.use("/api", authRoutes);
+app.use("/api", productosRoutes);
+app.use("/api", comprasRoutes);
 // app.use("/api", ventasRoutes);
-// app.use('/api', comprasRoutes);
-// app.use("/api", permisosRoutes);
-// app.use("/api", formulariosRoutes);
 // app.use("/api/reportes", reportesRoutes);
 
 app.get("/", (req, res) => {
@@ -66,5 +64,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor activo en http://localhost:${PORT}`);
   console.log(`📊 Base de datos: PostgreSQL`);
-  console.log(`🔧 Controladores migrados: 4/13`);
+  console.log(`🔧 Controladores migrados: 10/12 (compras ✅)`);
 });

@@ -1,178 +1,327 @@
-import { getConnection } from '../config/db.js';
-import oracledb from 'oracledb';
+import db from "../config/db.js";
 
-// Obtener todos los permisos
-export const listarPermisos = async (req, res) => {
+/* ===========================
+   SISTEMA DE PERMISOS SIMPLIFICADO
+   =========================== */
+// Tabla: roles_formularios (id_rol, id_formulario)
+// Si existe el registro = el rol tiene acceso completo al formulario
+
+/* ===========================
+   Helpers
+   =========================== */
+
+/** Verifica si un rol existe */
+async function existeRol(idRol) {
+  const rol = await db("roles").where("id_rol", idRol).first();
+  return !!rol;
+}
+
+/** Verifica si un formulario existe */
+async function existeFormulario(idFormulario) {
+  const formulario = await db("formularios")
+    .where("id_formulario", idFormulario)
+    .first();
+  return !!formulario;
+}
+
+/** Obtiene el padre de un formulario hijo */
+async function obtenerPadre(idFormulario) {
+  const formulario = await db("formularios")
+    .select("padre_id", "is_padre")
+    .where("id_formulario", idFormulario)
+    .first();
+
+  if (!formulario) return null;
+
+  // Si es padre, retorna null (no tiene padre)
+  if (formulario.is_padre || !formulario.padre_id) return null;
+
+  return formulario.padre_id;
+}
+
+/** Obtiene todos los hijos de un formulario padre */
+async function obtenerHijos(idFormularioPadre) {
+  const hijos = await db("formularios")
+    .select("id_formulario")
+    .where("padre_id", idFormularioPadre)
+    .where("is_padre", false);
+
+  return hijos.map((h) => h.id_formulario);
+}
+
+/** Verifica si ya existe el permiso */
+async function existePermiso(idRol, idFormulario) {
+  const permiso = await db("roles_formularios")
+    .where({ id_rol: idRol, id_formulario: idFormulario })
+    .first();
+  return !!permiso;
+}
+
+/* ===========================
+   Endpoints
+   =========================== */
+
+// GET /api/permisos
+// Lista todos los roles con sus formularios asignados
+export const listarTodosLosPermisos = async (req, res) => {
   try {
-    const connection = await getConnection();
+    const permisos = await db("roles_formularios as rf")
+      .join("roles as r", "rf.id_rol", "r.id_rol")
+      .join("formularios as f", "rf.id_formulario", "f.id_formulario")
+      .select(
+        "r.id_rol",
+        "r.nombre_rol",
+        "f.id_formulario",
+        "f.titulo_formulario",
+        "f.is_padre",
+        "f.padre_id",
+      )
+      .orderBy(["r.nombre_rol", "f.orden_formulario"]);
 
-    const result = await connection.execute(
-      `SELECT 
-        p.ID_PERFIL,
-        p.PERFIL_ROL,
-        f.CODIGO_FORMULARIO,
-        f.TITULO_FORMULARIO,
-        pr.NOMBRE_PERFIL,
-        p.PUEDE_CREAR,
-        p.PUEDE_LEER,
-        p.PUEDE_ACTUALIZAR,
-        p.PUEDE_ELIMINAR
-      FROM PERMISOS p
-      JOIN FORMULARIOS f ON p.CODIGO_FORMULARIO = f.CODIGO_FORMULARIO
-      JOIN PERFILES pr ON pr.ID_PERFIL = p.ID_PERFIL AND pr.PERFIL_ROL = p.PERFIL_ROL
-      ORDER BY p.ID_PERFIL, p.PERFIL_ROL, f.ORDEN`,
-      [],
-      { outFormat: oracledb.OUT_FORMAT_OBJECT }
-    );
-
-    res.status(200).json(result.rows);
+    res.json(permisos);
   } catch (error) {
-    console.error('❌ Error al listar permisos:', error);
-    res.status(500).json({ mensaje: 'Error al obtener los permisos' });
+    console.error("Error al listar permisos:", error);
+    res.status(500).json({ message: "Error al listar permisos." });
   }
 };
 
-
-// Crear un permiso
-export const crearPermisos = async (req, res) => {
-  const { idPerfil, perfilRol, permisos } = req.body;
+// GET /api/permisos/rol/:idRol
+// Obtiene todos los formularios asignados a un rol específico
+export const obtenerPermisosPorRol = async (req, res) => {
+  const { idRol } = req.params;
 
   try {
-    const connection = await getConnection();
-
-    for (const permiso of permisos) {
-      const {
-        codigoFormulario,
-        puedeCrear,
-        puedeLeer,
-        puedeActualizar,
-        puedeEliminar
-      } = permiso;
-
-      await connection.execute(
-        `INSERT INTO PERMISOS (
-          ID_PERFIL, CODIGO_FORMULARIO, PERFIL_ROL,
-          PUEDE_CREAR, PUEDE_LEER, PUEDE_ACTUALIZAR, PUEDE_ELIMINAR
-        ) VALUES (:1, :2, :3, :4, :5, :6, :7)`,
-        [
-          idPerfil,
-          codigoFormulario,
-          perfilRol,
-          puedeCrear,
-          puedeLeer,
-          puedeActualizar,
-          puedeEliminar
-        ],
-        { autoCommit: true }
-      );
+    // Verificar que el rol existe
+    if (!(await existeRol(idRol))) {
+      return res.status(404).json({ message: "El rol no existe." });
     }
 
-    res.status(201).json({ mensaje: '✅ Permisos asignados correctamente' });
+    const formularios = await db("roles_formularios as rf")
+      .join("formularios as f", "rf.id_formulario", "f.id_formulario")
+      .select(
+        "f.id_formulario",
+        "f.titulo_formulario",
+        "f.url_formulario",
+        "f.padre_id",
+        "f.is_padre",
+        "f.orden_formulario",
+      )
+      .where("rf.id_rol", idRol)
+      .orderBy([
+        { column: db.raw("COALESCE(f.padre_id, f.id_formulario)") },
+        { column: "f.orden_formulario", order: "asc" },
+      ]);
+
+    res.json(formularios);
   } catch (error) {
-    console.error('❌ Error al asignar permisos:', error);
-    res.status(500).json({ mensaje: 'Error al asignar los permisos' });
+    console.error("Error al obtener permisos por rol:", error);
+    res.status(500).json({ message: "Error al obtener permisos del rol." });
   }
 };
 
+// POST /api/permisos
+// Asigna un formulario a un rol (con validación de jerarquía)
+export const asignarPermiso = async (req, res) => {
+  const { id_rol, id_formulario } = req.body;
 
-// Actualizar un permiso
-export const actualizarPermiso = async (req, res) => {
-  const { ID_PERFIL, CODIGO_FORMULARIO, PERFIL_ROL } = req.params;
-  const {
-    PUEDE_CREAR,
-    PUEDE_LEER,
-    PUEDE_ACTUALIZAR,
-    PUEDE_ELIMINAR
-  } = req.body;
+  // Validaciones
+  if (!id_rol || !id_formulario) {
+    return res.status(400).json({
+      message: "Se requieren id_rol e id_formulario.",
+    });
+  }
 
   try {
-    const connection = await getConnection();
-    const result = await connection.execute(
-      `UPDATE PERMISOS
-       SET PUEDE_CREAR = :1,
-           PUEDE_LEER = :2,
-           PUEDE_ACTUALIZAR = :3,
-           PUEDE_ELIMINAR = :4
-       WHERE ID_PERFIL = :5
-         AND CODIGO_FORMULARIO = :6
-         AND PERFIL_ROL = :7`,
-      [
-        PUEDE_CREAR,
-        PUEDE_LEER,
-        PUEDE_ACTUALIZAR,
-        PUEDE_ELIMINAR,
-        ID_PERFIL,
-        CODIGO_FORMULARIO,
-        PERFIL_ROL
-      ],
-      { autoCommit: true }
-    );
-
-    if (result.rowsAffected === 0) {
-      return res.status(404).json({ mensaje: 'Permiso no encontrado' });
+    // Verificar existencia
+    if (!(await existeRol(id_rol))) {
+      return res.status(404).json({ message: "El rol no existe." });
     }
 
-    res.status(200).json({ mensaje: '✅ Permiso actualizado correctamente' });
-  } catch (error) {
-    console.error('❌ Error al actualizar permiso:', error);
-    res.status(500).json({ mensaje: 'Error al actualizar el permiso' });
-  }
-};
-
-// Eliminar un permiso
-export const eliminarPermiso = async (req, res) => {
-  const { ID_PERFIL, CODIGO_FORMULARIO, PERFIL_ROL } = req.params;
-
-  try {
-    const connection = await getConnection();
-    const result = await connection.execute(
-      `DELETE FROM PERMISOS
-       WHERE ID_PERFIL = :1
-         AND CODIGO_FORMULARIO = :2
-         AND PERFIL_ROL = :3`,
-      [ID_PERFIL, CODIGO_FORMULARIO, PERFIL_ROL],
-      { autoCommit: true }
-    );
-
-    if (result.rowsAffected === 0) {
-      return res.status(404).json({ mensaje: 'Permiso no encontrado para eliminar' });
+    if (!(await existeFormulario(id_formulario))) {
+      return res.status(404).json({ message: "El formulario no existe." });
     }
 
-    res.status(200).json({ mensaje: '🗑️ Permiso eliminado correctamente' });
+    // Verificar duplicado
+    if (await existePermiso(id_rol, id_formulario)) {
+      return res.status(409).json({
+        message: "Este permiso ya está asignado.",
+      });
+    }
+
+    // Asignar el permiso solicitado
+    await db("roles_formularios").insert({
+      id_rol,
+      id_formulario,
+    });
+
+    // VALIDACIÓN JERARQUÍA: Si es un hijo, asignar también el padre
+    const idPadre = await obtenerPadre(id_formulario);
+    if (idPadre && !(await existePermiso(id_rol, idPadre))) {
+      await db("roles_formularios").insert({
+        id_rol,
+        id_formulario: idPadre,
+      });
+    }
+
+    res.status(201).json({
+      message: "Permiso asignado correctamente.",
+      asignadoTambien: idPadre ? "Padre asignado automáticamente" : null,
+    });
   } catch (error) {
-    console.error('❌ Error al eliminar permiso:', error);
-    res.status(500).json({ mensaje: 'Error al eliminar el permiso' });
+    console.error("Error al asignar permiso:", error);
+    res.status(500).json({ message: "Error al asignar permiso." });
   }
 };
 
+// POST /api/permisos/bulk
+// Asigna múltiples formularios a un rol de una vez
+export const asignarPermisosBulk = async (req, res) => {
+  const { id_rol, id_formularios } = req.body;
 
-
-export const obtenerPermisosPorPerfil = async (req, res) => {
-  const { idPerfil, perfilRol } = req.params;
+  // Validaciones
+  if (
+    !id_rol ||
+    !Array.isArray(id_formularios) ||
+    id_formularios.length === 0
+  ) {
+    return res.status(400).json({
+      message: "Se requieren id_rol e id_formularios (array).",
+    });
+  }
 
   try {
-    const connection = await getConnection();
+    // Verificar que el rol existe
+    if (!(await existeRol(id_rol))) {
+      return res.status(404).json({ message: "El rol no existe." });
+    }
 
-    const result = await connection.execute(
-      `SELECT 
-        p.CODIGO_FORMULARIO,
-        f.TITULO_FORMULARIO,
-        f.URL_FORMULARIO,
-        p.PUEDE_CREAR,
-        p.PUEDE_LEER,
-        p.PUEDE_ACTUALIZAR,
-        p.PUEDE_ELIMINAR
-      FROM PERMISOS p
-      JOIN FORMULARIOS f ON p.CODIGO_FORMULARIO = f.CODIGO_FORMULARIO
-      WHERE p.ID_PERFIL = :1 AND p.PERFIL_ROL = :2
-      ORDER BY f.ORDEN`,
-      [idPerfil, perfilRol],
-      { outFormat: oracledb.OUT_FORMAT_OBJECT }
-    );
+    // Validar que TODOS los formularios existen ANTES de insertar
+    const formularioInvalidos = [];
+    for (const id_formulario of id_formularios) {
+      if (!(await existeFormulario(id_formulario))) {
+        formularioInvalidos.push(id_formulario);
+      }
+    }
 
-    res.status(200).json(result.rows);
+    if (formularioInvalidos.length > 0) {
+      return res.status(400).json({
+        message: `Los siguientes formularios no existen: ${formularioInvalidos.join(", ")}`,
+        formularioInvalidos,
+      });
+    }
+
+    const permisosAsignados = [];
+    const permisosExistentes = [];
+    const padresAsignados = new Set();
+
+    for (const id_formulario of id_formularios) {
+      // Verificar si ya existe
+      if (await existePermiso(id_rol, id_formulario)) {
+        permisosExistentes.push(id_formulario);
+        continue;
+      }
+
+      // Asignar permiso
+      await db("roles_formularios").insert({
+        id_rol,
+        id_formulario,
+      });
+      permisosAsignados.push(id_formulario);
+
+      // Asignar padre si es necesario
+      const idPadre = await obtenerPadre(id_formulario);
+      if (idPadre && !(await existePermiso(id_rol, idPadre))) {
+        if (!padresAsignados.has(idPadre)) {
+          await db("roles_formularios").insert({
+            id_rol,
+            id_formulario: idPadre,
+          });
+          padresAsignados.add(idPadre);
+        }
+      }
+    }
+
+    res.status(201).json({
+      message: "Permisos asignados correctamente.",
+      asignados: permisosAsignados.length,
+      yaExistian: permisosExistentes.length,
+      padresAsignados: padresAsignados.size,
+    });
   } catch (error) {
-    console.error('❌ Error al obtener permisos por perfil:', error);
-    res.status(500).json({ mensaje: 'Error al obtener permisos' });
+    console.error("Error al asignar permisos bulk:", error);
+    res.status(500).json({ message: "Error al asignar permisos." });
+  }
+};
+
+// DELETE /api/permisos/rol/:idRol/formulario/:idFormulario
+// Quita un formulario de un rol (con eliminación de hijos si es padre)
+export const quitarPermiso = async (req, res) => {
+  const { idRol, idFormulario } = req.params;
+
+  try {
+    // Verificar existencia
+    if (!(await existeRol(idRol))) {
+      return res.status(404).json({ message: "El rol no existe." });
+    }
+
+    if (!(await existeFormulario(idFormulario))) {
+      return res.status(404).json({ message: "El formulario no existe." });
+    }
+
+    // Verificar que existe el permiso
+    if (!(await existePermiso(idRol, idFormulario))) {
+      return res.status(404).json({
+        message: "Este rol no tiene asignado ese formulario.",
+      });
+    }
+
+    // VALIDACIÓN JERARQUÍA: Si es padre, eliminar también los hijos
+    const idsHijos = await obtenerHijos(idFormulario);
+    let hijosEliminados = 0;
+
+    if (idsHijos.length > 0) {
+      hijosEliminados = await db("roles_formularios")
+        .where("id_rol", idRol)
+        .whereIn("id_formulario", idsHijos)
+        .delete();
+    }
+
+    // Eliminar el permiso solicitado
+    await db("roles_formularios")
+      .where({ id_rol: idRol, id_formulario: idFormulario })
+      .delete();
+
+    res.json({
+      message: "Permiso eliminado correctamente.",
+      hijosEliminados: hijosEliminados > 0 ? hijosEliminados : null,
+    });
+  } catch (error) {
+    console.error("Error al quitar permiso:", error);
+    res.status(500).json({ message: "Error al quitar permiso." });
+  }
+};
+
+// DELETE /api/permisos/rol/:idRol
+// Elimina TODOS los permisos de un rol
+export const eliminarTodosLosPermisosDeRol = async (req, res) => {
+  const { idRol } = req.params;
+
+  try {
+    // Verificar que el rol existe
+    if (!(await existeRol(idRol))) {
+      return res.status(404).json({ message: "El rol no existe." });
+    }
+
+    const eliminados = await db("roles_formularios")
+      .where("id_rol", idRol)
+      .delete();
+
+    res.json({
+      message: `Todos los permisos del rol eliminados correctamente.`,
+      total: eliminados,
+    });
+  } catch (error) {
+    console.error("Error al eliminar permisos del rol:", error);
+    res.status(500).json({ message: "Error al eliminar permisos." });
   }
 };
