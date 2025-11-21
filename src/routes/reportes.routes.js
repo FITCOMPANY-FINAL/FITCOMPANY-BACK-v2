@@ -1,10 +1,15 @@
 import { Router } from "express";
-import { obtenerReporteVentasSemanal, obtenerReporteComprasSemanal } from "../controllers/reportes.controller.js";
+import {
+  reporteVentas,
+  reporteCompras,
+  dashboard,
+} from "../controllers/reportes.controller.js";
 
 const router = Router();
 
-router.get("/ventas", obtenerReporteVentasSemanal);
-
-router.get("/compras", obtenerReporteComprasSemanal);
+// Todos los reportes son públicos (puedes protegerlos con authRequired si lo deseas)
+router.get("/reportes/dashboard", dashboard);
+router.get("/reportes/ventas", reporteVentas);
+router.get("/reportes/compras", reporteCompras);
 
 export default router;
