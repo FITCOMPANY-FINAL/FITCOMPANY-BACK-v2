@@ -24,7 +24,7 @@ import productosRoutes from "./routes/productos.routes.js";
 import comprasRoutes from "./routes/compras.routes.js";
 import metodosPagoRoutes from "./routes/metodosPago.routes.js";
 import ventasRoutes from "./routes/ventas.routes.js";
-// import reportesRoutes from "./routes/reportes.routes.js";
+import reportesRoutes from "./routes/reportes.routes.js";
 
 const app = express();
 
@@ -53,7 +53,7 @@ app.use("/api", productosRoutes);
 app.use("/api", comprasRoutes);
 app.use("/api", metodosPagoRoutes);
 app.use("/api", ventasRoutes);
-// app.use("/api/reportes", reportesRoutes);
+app.use("/api", reportesRoutes);
 
 app.get("/", (req, res) => {
   res.send(
@@ -66,5 +66,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Servidor activo en http://localhost:${PORT}`);
   console.log(`📊 Base de datos: PostgreSQL`);
-  console.log(`🔧 Controladores migrados: 11/12 (ventas ✅)`);
+  console.log(`🎉 Controladores migrados: 12/12 (100% COMPLETO ✅)`);
 });
