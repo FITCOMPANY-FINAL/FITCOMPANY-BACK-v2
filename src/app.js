@@ -22,6 +22,7 @@ import usuariosRoutes from "./routes/usuarios.routes.js";
 import authRoutes from "./routes/auth.routes.js";
 import productosRoutes from "./routes/productos.routes.js";
 import comprasRoutes from "./routes/compras.routes.js";
+import metodosPagoRoutes from "./routes/metodosPago.routes.js";
 // import ventasRoutes from './routes/ventas.routes.js';
 // import reportesRoutes from "./routes/reportes.routes.js";
 
@@ -50,6 +51,7 @@ app.use("/api", usuariosRoutes);
 app.use("/api", authRoutes);
 app.use("/api", productosRoutes);
 app.use("/api", comprasRoutes);
+app.use("/api", metodosPagoRoutes);
 // app.use("/api", ventasRoutes);
 // app.use("/api/reportes", reportesRoutes);
 
