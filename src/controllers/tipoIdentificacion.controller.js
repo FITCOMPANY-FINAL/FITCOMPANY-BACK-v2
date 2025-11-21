@@ -64,10 +64,17 @@ export const listarTiposIdentificacion = async (req, res) => {
         "nombre_tipo_identificacion as nombre",
         "abreviatura_tipo_identificacion as abreviatura",
         "descripcion_tipo_identificacion as descripcion",
+        "activo"
       )
       .orderBy("nombre_tipo_identificacion");
 
-    res.json(tipos);
+    // Mapear activo a estado 'A' o 'I' para compatibilidad con el frontend
+    const tiposMapeados = tipos.map(tipo => ({
+      ...tipo,
+      estado: tipo.activo ? 'A' : 'I'
+    }));
+
+    res.json(tiposMapeados);
   } catch (error) {
     console.error("Error al listar tipos:", error);
     res.status(500).json({ message: "Error al listar tipos." });
@@ -76,7 +83,9 @@ export const listarTiposIdentificacion = async (req, res) => {
 
 // Pre-chequeo para el front (existe canónicamente)
 export const existeTipoIdentificacion = async (req, res) => {
-  const { nombre, excludeId } = req.query;
+  // Aceptar tanto 'nombre' como 'descripcion' para compatibilidad
+  const nombre = req.query.nombre || req.query.descripcion;
+  const excludeId = req.query.excludeId;
   const base = collapseSpaces(nombre);
   if (!base) return res.json({ exists: false });
 
@@ -93,7 +102,12 @@ export const existeTipoIdentificacion = async (req, res) => {
 };
 
 export const crearTipoIdentificacion = async (req, res) => {
-  let { nombre, abreviatura, descripcion } = req.body;
+  // Aceptar tanto 'nombre' como 'descripcion' para compatibilidad con el frontend
+  let { nombre, descripcion, abreviatura } = req.body;
+  // Si viene 'descripcion' pero no 'nombre', usar 'descripcion' como 'nombre'
+  if (!nombre && descripcion) {
+    nombre = descripcion;
+  }
   nombre = collapseSpaces(nombre);
   abreviatura = collapseSpaces(abreviatura ?? "");
   descripcion = collapseSpaces(descripcion ?? "");
@@ -118,7 +132,8 @@ export const crearTipoIdentificacion = async (req, res) => {
     await db("tipos_identificacion").insert({
       nombre_tipo_identificacion: nombre,
       abreviatura_tipo_identificacion: abreviatura || null,
-      descripcion_tipo_identificacion: descripcion || null,
+      descripcion_tipo_identificacion: descripcion || nombre, // Si no viene descripcion, usar el nombre
+      activo: true, // Por defecto activo
     });
 
     res
@@ -132,7 +147,12 @@ export const crearTipoIdentificacion = async (req, res) => {
 
 export const actualizarTipoIdentificacion = async (req, res) => {
   const { id } = req.params;
-  let { nombre, abreviatura, descripcion } = req.body;
+  // Aceptar tanto 'nombre' como 'descripcion' para compatibilidad con el frontend
+  let { nombre, descripcion, abreviatura } = req.body;
+  // Si viene 'descripcion' pero no 'nombre', usar 'descripcion' como 'nombre'
+  if (!nombre && descripcion) {
+    nombre = descripcion;
+  }
   nombre = collapseSpaces(nombre);
   abreviatura = collapseSpaces(abreviatura ?? "");
   descripcion = collapseSpaces(descripcion ?? "");
@@ -159,7 +179,7 @@ export const actualizarTipoIdentificacion = async (req, res) => {
       .update({
         nombre_tipo_identificacion: nombre,
         abreviatura_tipo_identificacion: abreviatura || null,
-        descripcion_tipo_identificacion: descripcion || null,
+        descripcion_tipo_identificacion: descripcion || nombre, // Si no viene descripcion, usar el nombre
       });
 
     if (rowsAffected === 0) {

@@ -3,6 +3,7 @@ import {
   listarCompras,
   obtenerCompraPorId,
   crearCompra,
+  actualizarCompra,
   eliminarCompra,
 } from "../controllers/compras.controller.js";
 import { authRequired } from "../middlewares/authMiddleware.js";
@@ -15,9 +16,7 @@ router.get("/compras/:id", obtenerCompraPorId);
 
 // Rutas protegidas (requieren autenticación JWT)
 router.post("/compras", authRequired, crearCompra);
+router.put("/compras/:id", authRequired, actualizarCompra);
 router.delete("/compras/:id", authRequired, eliminarCompra);
-
-// NO implementamos PUT (actualizar compra) por simplicidad
-// Si se necesita modificar: eliminar y crear nueva
 
 export default router;

@@ -44,12 +44,29 @@ function validarPayloadProducto(p) {
   // Coerción a número
   const toNum = (v) =>
     v === "" || v === null || v === undefined ? NaN : Number(v);
-  p.precio_costo = toNum(p.precio_costo);
+  
+  // Aceptar tanto nombres del frontend como del backend para compatibilidad
+  // precio_unitario del frontend se mapea a precio_venta
+  if (p.precio_unitario !== undefined && p.precio_venta === undefined) {
+    p.precio_venta = toNum(p.precio_unitario);
+  }
+  p.precio_costo = toNum(p.precio_costo ?? 0); // Por defecto 0 si no viene
   p.precio_venta = toNum(p.precio_venta);
+  
   p.stock_actual = toNum(p.stock_actual);
   p.stock_minimo = toNum(p.stock_minimo);
   p.stock_maximo = toNum(p.stock_maximo);
+  
+  // Aceptar tanto unidad_medida como id_unidad_medida
+  if (p.unidad_medida !== undefined && p.id_unidad_medida === undefined) {
+    p.id_unidad_medida = toNum(p.unidad_medida);
+  }
   p.id_unidad_medida = toNum(p.id_unidad_medida);
+  
+  // Aceptar tanto producto_categoria como id_categoria
+  if (p.producto_categoria !== undefined && p.id_categoria === undefined) {
+    p.id_categoria = toNum(p.producto_categoria);
+  }
   p.id_categoria = toNum(p.id_categoria);
 
   // Validaciones de nombre
@@ -181,7 +198,14 @@ export const listarProductos = async (req, res) => {
       .where("p.activo", true) // Solo productos activos
       .orderBy("p.nombre_producto");
 
-    res.json(productos);
+    // Mapear activo a estado y precio_venta a precio_unitario para compatibilidad con frontend
+    const productosMapeados = productos.map(p => ({
+      ...p,
+      precio_unitario: p.precio_venta, // Mapear para compatibilidad con frontend
+      estado: p.activo ? 'A' : 'I'
+    }));
+
+    res.json(productosMapeados);
   } catch (error) {
     console.error("Error al listar productos:", error);
     res.status(500).json({ message: "Error al listar productos." });
@@ -385,8 +409,10 @@ export const eliminarProducto = async (req, res) => {
 
     // Validar regla de stock: solo permitir si stock_actual <= stock_minimo
     if (producto.stock_actual > producto.stock_minimo) {
+      const stockActual = Math.floor(producto.stock_actual);
+      const stockMinimo = Math.floor(producto.stock_minimo);
       return res.status(409).json({
-        message: `No se puede eliminar el producto porque el stock actual (${producto.stock_actual}) es mayor que el mínimo (${producto.stock_minimo}). Primero bájalo hasta su stock mínimo.`,
+        message: `No se puede eliminar el producto porque el stock actual (${stockActual}) es mayor que el mínimo (${stockMinimo}). Primero bájalo hasta su stock mínimo.`,
       });
     }
 

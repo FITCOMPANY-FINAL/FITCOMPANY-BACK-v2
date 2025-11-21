@@ -241,6 +241,19 @@ export const crearCompra = async (req, res) => {
   try {
     // TRANSACCIÓN: Todo o nada
     const resultado = await db.transaction(async (trx) => {
+      // PASO 0: Validar que el usuario autenticado existe en la base de datos
+      const usuarioExiste = await trx("usuarios")
+        .where("id_tipo_identificacion", authUser.tipo_id)
+        .where("identificacion_usuario", authUser.identificacion)
+        .where("activo", true)
+        .first();
+
+      if (!usuarioExiste) {
+        throw new Error(
+          `El usuario autenticado (tipo: ${authUser.tipo_id}, identificación: ${authUser.identificacion}) no existe o está inactivo en la base de datos.`,
+        );
+      }
+
       // PASO 1: Validar que todos los productos existan y estén activos
       const productosValidados = [];
 
@@ -381,7 +394,7 @@ export const crearCompra = async (req, res) => {
     console.error("❌ Error al crear compra:", error);
 
     // Error de validación lanzado en la transacción
-    if (error.message && error.message.includes("no existe")) {
+    if (error.message && (error.message.includes("no existe") || error.message.includes("no está presente"))) {
       return res.status(400).json({ message: error.message });
     }
 
@@ -389,7 +402,270 @@ export const crearCompra = async (req, res) => {
       return res.status(400).json({ message: error.message });
     }
 
+    // Error de foreign key (usuario no existe)
+    if (error.code === '23503' && error.constraint?.includes('usuarios')) {
+      return res.status(400).json({ 
+        message: `El usuario autenticado no existe o está inactivo en la base de datos. Por favor, cierra sesión y vuelve a iniciar sesión.` 
+      });
+    }
+
     res.status(500).json({ message: "Error al crear compra." });
+  }
+};
+
+/**
+ * PUT /api/compras/:id
+ * Actualizar una compra existente
+ * Requiere autenticación (JWT)
+ */
+export const actualizarCompra = async (req, res) => {
+  const { id } = req.params;
+  const payload = { ...req.body };
+
+  // VALIDACIÓN 1: Usuario autenticado
+  const authUser = getAuthUser(req);
+  if (!authUser) {
+    return res
+      .status(401)
+      .json({ message: "Usuario no autenticado. Se requiere token JWT." });
+  }
+
+  // VALIDACIÓN 2: Estructura del payload
+  const validacionPayload = validarPayloadCompra(payload);
+  if (!validacionPayload.ok) {
+    return res.status(400).json({ message: validacionPayload.message });
+  }
+
+  // VALIDACIÓN 3: Fecha de compra
+  const validacionFecha = validarFechaCompra(payload.fecha_compra);
+  if (!validacionFecha.ok) {
+    return res.status(400).json({ message: validacionFecha.message });
+  }
+
+  try {
+    // TRANSACCIÓN: Todo o nada
+    const resultado = await db.transaction(async (trx) => {
+      // PASO 0: Validar que el usuario autenticado existe
+      const usuarioExiste = await trx("usuarios")
+        .where("id_tipo_identificacion", authUser.tipo_id)
+        .where("identificacion_usuario", authUser.identificacion)
+        .where("activo", true)
+        .first();
+
+      if (!usuarioExiste) {
+        throw new Error(
+          `El usuario autenticado (tipo: ${authUser.tipo_id}, identificación: ${authUser.identificacion}) no existe o está inactivo en la base de datos.`,
+        );
+      }
+
+      // PASO 1: Verificar que la compra existe
+      const compraExistente = await trx("compras")
+        .where("id_compra", id)
+        .first();
+
+      if (!compraExistente) {
+        throw new Error("COMPRA_NO_ENCONTRADA");
+      }
+
+      // PASO 2: Obtener detalles actuales para revertir stock
+      const detallesActuales = await trx("detalle_compra")
+        .where("id_compra", id);
+
+      // PASO 3: Revertir stock anterior (restar lo que se había sumado)
+      for (const detalle of detallesActuales) {
+        const producto = await trx("productos")
+          .where("id_producto", detalle.id_producto)
+          .first();
+
+        if (!producto) {
+          throw new Error(`El producto ${detalle.id_producto} ya no existe.`);
+        }
+
+        const stockAnterior = Number(producto.stock_actual);
+        const cantidadARevertir = Number(detalle.cantidad_detalle_compra);
+        const nuevoStock = stockAnterior - cantidadARevertir;
+
+        if (nuevoStock < 0) {
+          throw new Error(
+            `No se puede actualizar la compra porque el producto "${producto.nombre_producto}" ` +
+              `quedaría con stock negativo (${nuevoStock}) al revertir la compra anterior. Posiblemente ya se vendió parte del stock.`,
+          );
+        }
+
+        await trx("productos")
+          .where("id_producto", detalle.id_producto)
+          .update({ stock_actual: nuevoStock });
+      }
+
+      // PASO 4: Validar que todos los nuevos productos existan y estén activos
+      const productosValidados = [];
+
+      for (const detalle of payload.detalles) {
+        const producto = await trx("productos")
+          .where("id_producto", detalle.id_producto)
+          .where("activo", true)
+          .first();
+
+        if (!producto) {
+          throw new Error(
+            `El producto con ID ${detalle.id_producto} no existe o está inactivo.`,
+          );
+        }
+
+        productosValidados.push({
+          ...producto,
+          cantidad_compra: Number(detalle.cantidad),
+          precio_compra: Number(detalle.precio_unitario),
+        });
+      }
+
+      // PASO 5: Eliminar detalles antiguos
+      await trx("detalle_compra").where("id_compra", id).del();
+
+      // PASO 6: Crear nuevos detalles y calcular total
+      let totalCompra = 0;
+      const detallesCreados = [];
+      const productosAfectados = [];
+
+      for (const prod of productosValidados) {
+        const subtotal = prod.cantidad_compra * prod.precio_compra;
+        totalCompra += subtotal;
+
+        // Insertar nuevo detalle
+        const [detalleCreado] = await trx("detalle_compra")
+          .insert({
+            id_compra: id,
+            id_producto: prod.id_producto,
+            cantidad_detalle_compra: prod.cantidad_compra,
+            precio_unitario_compra: prod.precio_compra,
+          })
+          .returning("*");
+
+        detallesCreados.push({
+          ...detalleCreado,
+          nombre_producto: prod.nombre_producto,
+        });
+
+        // Obtener stock actual después de la reversión
+        const productoActualizado = await trx("productos")
+          .where("id_producto", prod.id_producto)
+          .first();
+
+        const stockAnterior = Number(productoActualizado.stock_actual);
+        const stockNuevo = stockAnterior + prod.cantidad_compra;
+
+        productosAfectados.push({
+          id_producto: prod.id_producto,
+          nombre_producto: prod.nombre_producto,
+          stock_anterior: stockAnterior,
+          cantidad_agregada: prod.cantidad_compra,
+          stock_nuevo: stockNuevo,
+          stock_maximo: Number(prod.stock_maximo),
+        });
+
+        // PASO 7: Aplicar nuevo stock
+        await trx("productos")
+          .where("id_producto", prod.id_producto)
+          .update({ stock_actual: stockNuevo });
+      }
+
+      // PASO 8: Actualizar compra (total, fecha, observaciones)
+      await trx("compras")
+        .where("id_compra", id)
+        .update({
+          fecha_compra: payload.fecha_compra || compraExistente.fecha_compra,
+          total: totalCompra,
+          observaciones: payload.observaciones !== undefined ? payload.observaciones : compraExistente.observaciones,
+        });
+
+      // PASO 9: Generar warnings si supera stock máximo
+      const warnings = [];
+
+      for (const prod of productosAfectados) {
+        if (prod.stock_nuevo > prod.stock_maximo) {
+          warnings.push({
+            tipo: "STOCK_SOBRE_MAXIMO",
+            id_producto: prod.id_producto,
+            nombre_producto: prod.nombre_producto,
+            stock_anterior: prod.stock_anterior,
+            stock_nuevo: prod.stock_nuevo,
+            stock_maximo: prod.stock_maximo,
+            diferencia: prod.stock_nuevo - prod.stock_maximo,
+            mensaje: `El stock de "${prod.nombre_producto}" superó el máximo recomendado (${prod.stock_nuevo}/${prod.stock_maximo}).`,
+          });
+        }
+      }
+
+      // Obtener compra actualizada
+      const compraActualizada = await trx("compras")
+        .where("id_compra", id)
+        .first();
+
+      return {
+        compra: compraActualizada,
+        detalles: detallesCreados.map((d) => ({
+          id_producto: d.id_producto,
+          nombre_producto: d.nombre_producto,
+          cantidad: d.cantidad_detalle_compra,
+          precio_unitario: d.precio_unitario_compra,
+          subtotal: d.subtotal_compra,
+        })),
+        productos_afectados: productosAfectados.map((p) => ({
+          id_producto: p.id_producto,
+          nombre_producto: p.nombre_producto,
+          stock_anterior: p.stock_anterior,
+          stock_nuevo: p.stock_nuevo,
+        })),
+        warnings,
+      };
+    });
+
+    console.log(
+      `✅ Compra actualizada: ID ${id} | Total: $${resultado.compra.total}`,
+    );
+    console.log(
+      `   Productos: ${resultado.detalles.length} | Warnings: ${resultado.warnings.length}`,
+    );
+
+    // RESPUESTA EXITOSA
+    res.json({
+      message: "Compra actualizada correctamente.",
+      compra: resultado.compra,
+      detalles: resultado.detalles,
+      productos_afectados: resultado.productos_afectados,
+      warnings: resultado.warnings.length > 0 ? resultado.warnings : null,
+    });
+  } catch (error) {
+    console.error("❌ Error al actualizar compra:", error);
+
+    if (error.message === "COMPRA_NO_ENCONTRADA") {
+      return res.status(404).json({ message: "Compra no encontrada." });
+    }
+
+    // Error de validación lanzado en la transacción
+    if (error.message && (error.message.includes("no existe") || error.message.includes("no está presente"))) {
+      return res.status(400).json({ message: error.message });
+    }
+
+    if (error.message && error.message.includes("no válida")) {
+      return res.status(400).json({ message: error.message });
+    }
+
+    if (error.message && error.message.includes("stock negativo")) {
+      return res.status(409).json({
+        message: error.message,
+        code: "STOCK_INSUFICIENTE",
+      });
+    }
+
+    // Error de foreign key (usuario no existe)
+    if (error.code === '23503' && error.constraint?.includes('usuarios')) {
+      return res.status(400).json({ 
+        message: `El usuario autenticado no existe o está inactivo en la base de datos. Por favor, cierra sesión y vuelve a iniciar sesión.` 
+      });
+    }
+
+    res.status(500).json({ message: "Error al actualizar compra." });
   }
 };
 

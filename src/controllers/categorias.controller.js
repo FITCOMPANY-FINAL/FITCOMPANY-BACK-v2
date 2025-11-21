@@ -57,7 +57,13 @@ export const listarCategorias = async (_req, res) => {
       )
       .orderBy("nombre_categoria");
 
-    res.json(categorias);
+    // Mapear activa a estado 'A' o 'I' para compatibilidad con el frontend
+    const categoriasMapeadas = categorias.map(categoria => ({
+      ...categoria,
+      estado: categoria.activa ? 'A' : 'I'
+    }));
+
+    res.json(categoriasMapeadas);
   } catch (error) {
     console.error("Error al listar categorías:", error);
     res.status(500).json({ message: "Error al listar categorías." });

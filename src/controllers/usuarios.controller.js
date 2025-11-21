@@ -99,7 +99,21 @@ export const listarUsuarios = async (_req, res) => {
       )
       .orderBy("u.nombres_usuario");
 
-    res.json(usuarios);
+    // Mapear a formato esperado por el frontend
+    const usuariosMapeados = usuarios.map(u => ({
+      tipo_identificacion: String(u.id_tipo_identificacion), // ID como string
+      identificacion: u.identificacion_usuario,
+      nombre: u.nombres_usuario,
+      apellido1: u.apellido1_usuario,
+      apellido2: u.apellido2_usuario || null,
+      correo: u.email_usuario,
+      id_rol: u.id_rol,
+      rol_nombre: u.nombre_rol,
+      activo: u.activo,
+      estado: u.activo ? 'A' : 'I', // Mapear activo a estado para consistencia
+    }));
+
+    res.json(usuariosMapeados);
   } catch (error) {
     console.error("Error al listar usuarios:", error);
     res.status(500).json({ message: "Error al listar usuarios." });
@@ -110,16 +124,33 @@ export const listarUsuarios = async (_req, res) => {
    CREAR
    =========================== */
 export const crearUsuario = async (req, res) => {
+  // Aceptar tanto nombres del frontend como del backend para compatibilidad
   let {
-    id_tipo_identificacion,
-    identificacion_usuario,
-    nombres_usuario,
-    apellido1_usuario,
-    apellido2_usuario,
-    email_usuario,
-    password,
-    id_rol,
+    tipo_identificacion, // Frontend usa este nombre
+    id_tipo_identificacion, // Backend usa este nombre
+    identificacion, // Frontend usa este nombre
+    identificacion_usuario, // Backend usa este nombre
+    nombre, // Frontend usa este nombre
+    nombres_usuario, // Backend usa este nombre
+    apellido1, // Frontend usa este nombre
+    apellido1_usuario, // Backend usa este nombre
+    apellido2, // Frontend usa este nombre
+    apellido2_usuario, // Backend usa este nombre
+    correo, // Frontend usa este nombre
+    email_usuario, // Backend usa este nombre
+    contrasennia, // Frontend usa este nombre
+    password, // Backend usa este nombre
+    id_rol, // Backend usa este nombre
   } = req.body;
+
+  // Normalizar: usar valores del frontend si existen, sino usar del backend
+  id_tipo_identificacion = tipo_identificacion || id_tipo_identificacion;
+  identificacion_usuario = identificacion || identificacion_usuario;
+  nombres_usuario = nombre || nombres_usuario;
+  apellido1_usuario = apellido1 || apellido1_usuario;
+  apellido2_usuario = apellido2 || apellido2_usuario;
+  email_usuario = correo || email_usuario;
+  password = contrasennia || password;
 
   // Normalización
   identificacion_usuario = (identificacion_usuario ?? "").trim();
@@ -281,16 +312,33 @@ export const actualizarUsuario = async (req, res) => {
   const { tipo: tipoActual, id: idActual } = req.params;
 
   // Valores NUEVOS (lo que escribió la persona en el formulario)
+  // Aceptar tanto nombres del frontend como del backend para compatibilidad
   let {
-    id_tipo_identificacion, // nuevo tipo
-    identificacion_usuario, // nueva identificación
-    nombres_usuario,
-    apellido1_usuario,
-    apellido2_usuario,
-    email_usuario,
-    password, // opcional: si viene y tiene >=3, se actualiza
-    id_rol,
+    tipo_identificacion, // Frontend usa este nombre
+    id_tipo_identificacion, // Backend usa este nombre
+    identificacion, // Frontend usa este nombre
+    identificacion_usuario, // Backend usa este nombre
+    nombre, // Frontend usa este nombre
+    nombres_usuario, // Backend usa este nombre
+    apellido1, // Frontend usa este nombre
+    apellido1_usuario, // Backend usa este nombre
+    apellido2, // Frontend usa este nombre
+    apellido2_usuario, // Backend usa este nombre
+    correo, // Frontend usa este nombre
+    email_usuario, // Backend usa este nombre
+    contrasennia, // Frontend usa este nombre
+    password, // Backend usa este nombre
+    id_rol, // Backend usa este nombre
   } = req.body;
+
+  // Normalizar: usar valores del frontend si existen, sino usar del backend
+  id_tipo_identificacion = tipo_identificacion || id_tipo_identificacion;
+  identificacion_usuario = identificacion || identificacion_usuario;
+  nombres_usuario = nombre || nombres_usuario;
+  apellido1_usuario = apellido1 || apellido1_usuario;
+  apellido2_usuario = apellido2 || apellido2_usuario;
+  email_usuario = correo || email_usuario;
+  password = contrasennia || password;
 
   // Normalización
   identificacion_usuario = (identificacion_usuario ?? "").trim();
@@ -396,12 +444,18 @@ export const actualizarUsuario = async (req, res) => {
         .json({ message: "El rol seleccionado no existe." });
     }
 
-    // 4) Si cambió la identificación, validar que la NUEVA no exista
+    // 4) Si cambió la identificación o el tipo, validar que la NUEVA combinación no exista
+    // (excluyendo al usuario actual)
+    const tipoActualInt = parseInt(tipoActual);
+    const idTipoNuevoInt = parseInt(id_tipo_identificacion);
+    
+    // Solo validar si realmente cambió la identificación o el tipo
     if (
       identificacion_usuario !== idActual ||
-      id_tipo_identificacion !== parseInt(tipoActual)
+      idTipoNuevoInt !== tipoActualInt
     ) {
-      if (await existeUsuarioPorIdent(identificacion_usuario)) {
+      // Verificar que la nueva identificación no exista (excluyendo el usuario actual)
+      if (await existeUsuarioPorIdent(identificacion_usuario, tipoActualInt, idActual)) {
         return res.status(409).json({
           code: "DUP_IDENT",
           field: "identificacion_usuario",
@@ -445,6 +499,21 @@ export const actualizarUsuario = async (req, res) => {
     if (cambioEnPK) {
       // Usar transacción para DELETE + INSERT
       await db.transaction(async (trx) => {
+        // Obtener el hash_password_usuario del usuario original antes de eliminarlo
+        // (necesario si no se está cambiando la contraseña)
+        const usuarioOriginal = await trx("usuarios")
+          .where({
+            id_tipo_identificacion: tipoActual,
+            identificacion_usuario: idActual,
+          })
+          .select("hash_password_usuario")
+          .first();
+
+        // Si no se proporcionó nueva contraseña, usar la del usuario original
+        if (!datosActualizar.hash_password_usuario && usuarioOriginal) {
+          datosActualizar.hash_password_usuario = usuarioOriginal.hash_password_usuario;
+        }
+
         // Eliminar el registro anterior
         await trx("usuarios")
           .where({
