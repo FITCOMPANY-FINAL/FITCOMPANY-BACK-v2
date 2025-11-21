@@ -1,19 +1,20 @@
 import { Router } from "express";
 import {
-  crearVenta,
-  obtenerVentas,
-  eliminarVenta,
-  actualizarVenta,
+  listarVentas,
   obtenerVentaPorId,
+  crearVenta,
+  eliminarVenta,
 } from "../controllers/ventas.controller.js";
 import { authRequired } from "../middlewares/authMiddleware.js";
 
 const router = Router();
 
-router.get("/ventas", obtenerVentas);
+// GET públicas (listar ventas, obtener detalle)
+router.get("/ventas", listarVentas);
 router.get("/ventas/:id", obtenerVentaPorId);
+
+// POST/DELETE protegidas
 router.post("/ventas", authRequired, crearVenta);
-router.put("/ventas/:id", authRequired, actualizarVenta);
 router.delete("/ventas/:id", authRequired, eliminarVenta);
 
 export default router;
