@@ -42,14 +42,21 @@ export const listarUnidadesMedida = async (req, res) => {
   try {
     const unidades = await db("unidades_medida")
       .select(
-        "id_unidad_medida",
+        "id_unidad_medida as codigo_unidad_medida", // Mapear para compatibilidad con frontend
         "nombre_unidad_medida",
         "abreviatura_unidad_medida",
         "descripcion_unidad_medida",
+        "activo"
       )
       .orderBy("nombre_unidad_medida");
 
-    res.json(unidades);
+    // Mapear activo a estado 'A' o 'I' para compatibilidad con el frontend
+    const unidadesMapeadas = unidades.map(unidad => ({
+      ...unidad,
+      estado: unidad.activo ? 'A' : 'I'
+    }));
+
+    res.json(unidadesMapeadas);
   } catch (error) {
     console.error("Error al listar unidades de medida:", error);
     res.status(500).json({ message: "Error al listar unidades de medida." });
@@ -103,6 +110,7 @@ export const crearUnidadMedida = async (req, res) => {
       nombre_unidad_medida,
       abreviatura_unidad_medida: abreviatura_unidad_medida || null,
       descripcion_unidad_medida: descripcion_unidad_medida || null,
+      activo: true, // Por defecto activo
     });
     res.status(201).json({ message: "Unidad de medida creada correctamente." });
   } catch (error) {

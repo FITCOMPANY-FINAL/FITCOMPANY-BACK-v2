@@ -1,5 +1,5 @@
 // src/controllers/ventas.controller.js
-import { getConnection } from '../config/db.js';
+import db from '../config/db.js';
 
 /* ===========================
    Helpers
@@ -9,12 +9,17 @@ function getAuthUser(req) {
   const email = req?.user?.email || req?.user?.correo || req?.user?.usuario;
   const tipo_id =
     req?.user?.tipo_id ||
-    req?.user?.tipo ||                 // acepta el campo "tipo" del token
+    req?.user?.tipo ||
     req?.user?.tipoIdentificacion ||
     req?.user?.tipo_identificacion;
+  const identificacion = req?.user?.identificacion;
 
-  if (!email || !tipo_id) return null;
-  return { email, tipo_id: Number(tipo_id) };
+  if (!email || !tipo_id || !identificacion) return null;
+  return { 
+    email, 
+    tipo_id: Number(tipo_id),
+    identificacion: String(identificacion)
+  };
 }
 
 function agruparCantidades(items) {
@@ -25,12 +30,6 @@ function agruparCantidades(items) {
     map.set(id, (map.get(id) || 0) + qty);
   }
   return map; // Map<id_producto, cantidadTotalSolicitada>
-}
-
-function buildInBindings(ids, prefix = 'p') {
-  const keys = ids.map((_, i) => `:${prefix}${i}`).join(',');
-  const binds = Object.fromEntries(ids.map((v, i) => [`${prefix}${i}`, v]));
-  return { keys, binds };
 }
 
 const isInt = (n) => Number.isInteger(n);
@@ -67,38 +66,24 @@ function validarItemsVenta(productos) {
   return null;
 }
 
-// Lee STOCK_ACTUAL, MINIMO y MAXIMO para lista de productos
-async function getStocks(conn, ids) {
+// Obtener stocks de productos usando Knex
+async function getStocks(trx, ids) {
   if (!ids.length) return new Map();
-  const { keys, binds } = buildInBindings(ids, 'p');
-  const r = await conn.execute(
-    `SELECT ID_PRODUCTO, NOMBRE_PRODUCTO, STOCK_ACTUAL, STOCK_MINIMO, STOCK_MAXIMO
-       FROM PRODUCTOS
-      WHERE ID_PRODUCTO IN (${keys})`,
-    binds
-  );
+  
+  const productos = await trx("productos")
+    .select("id_producto", "nombre_producto", "stock_actual", "stock_minimo", "stock_maximo")
+    .whereIn("id_producto", ids);
+  
   const map = new Map();
-  for (const [id, nombre, act, min, max] of r.rows) {
-    map.set(id, { nombre, act: Number(act), min: Number(min), max: Number(max) });
+  for (const p of productos) {
+    map.set(p.id_producto, {
+      nombre: p.nombre_producto,
+      act: Number(p.stock_actual),
+      min: Number(p.stock_minimo),
+      max: Number(p.stock_maximo)
+    });
   }
   return map; // Map<id, {nombre,act,min,max}>
-}
-
-
-function mapOracleStockError(err) {
-  const text = String(err?.message || '');
-  if (err?.errorNum === 20002 || text.includes('ORA-20002')) {
-    return text.replace(/^.*ORA-20002:\s*/, '').trim()
-      || '❌ Movimiento supera el stock máximo permitido.';
-  }
-  if (err?.errorNum === 20001 || text.includes('ORA-20001')) {
-    return text.replace(/^.*ORA-20001:\s*/, '').trim()
-      || '❌ Movimiento dejaría el stock por debajo del mínimo.';
-  }
-  if (err?.errorNum === 1438 || text.includes('ORA-01438')) {
-    return 'Límite del sistema: el stock no puede superar 999.999.';
-  }
-  return null;
 }
 
 /* ===========================
@@ -107,7 +92,19 @@ function mapOracleStockError(err) {
 export const crearVenta = async (req, res) => {
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ message: "Usuario no autenticado." });
-  const { email: usuario, tipo_id } = authUser;
+
+  // Validar que el usuario existe
+  const usuarioExiste = await db("usuarios")
+    .where("id_tipo_identificacion", authUser.tipo_id)
+    .where("identificacion_usuario", authUser.identificacion)
+    .where("activo", true)
+    .first();
+
+  if (!usuarioExiste) {
+    return res.status(400).json({ 
+      message: "El usuario autenticado no existe o está inactivo en la base de datos." 
+    });
+  }
 
   const errorItems = validarItemsVenta(req.body?.productos);
   if (errorItems) return res.status(400).json({ message: errorItems });
@@ -126,93 +123,113 @@ export const crearVenta = async (req, res) => {
     });
   }
 
-  let connection;
   const warnings = [];
   try {
-    connection = await getConnection();
+    const resultado = await db.transaction(async (trx) => {
+      // === BLOQUEAR SOBREVENTA ===
+      const agrupado = agruparCantidades(productos);
+      const ids = Array.from(agrupado.keys());
+      const stocks = await getStocks(trx, ids);
 
-    // === BLOQUEAR SOBREVENTA ===
-    const agrupado = agruparCantidades(productos);
-    const ids = Array.from(agrupado.keys());
-    const stocks = await getStocks(connection, ids);
-
-    const insuficientes = [];
-    for (const id of ids) {
-      const reqQty = agrupado.get(id) || 0;
-      const s = stocks.get(id);
-      const disponible = s?.act ?? 0;
-      if (reqQty > disponible) {
-        insuficientes.push({
-          producto_id: id,
-          nombre: s?.nombre || '',
-          solicitado: reqQty,
-          disponible,
-          deficit: reqQty - disponible
-        });
+      const insuficientes = [];
+      for (const id of ids) {
+        const reqQty = agrupado.get(id) || 0;
+        const s = stocks.get(id);
+        const disponible = s?.act ?? 0;
+        if (reqQty > disponible) {
+          insuficientes.push({
+            producto_id: id,
+            nombre: s?.nombre || '',
+            solicitado: reqQty,
+            disponible,
+            deficit: reqQty - disponible
+          });
+        }
       }
-    }
-    if (insuficientes.length) {
-      await connection.close();
+      if (insuficientes.length) {
+        throw new Error('STOCK_NOT_ENOUGH');
+      }
+
+      // === Registrar venta ===
+      const [nuevaVenta] = await trx("ventas")
+        .insert({
+          fecha_venta: trx.fn.now(),
+          total: 0, // Se calculará después
+          id_tipo_identificacion_usuario: authUser.tipo_id,
+          identificacion_usuario: authUser.identificacion,
+        })
+        .returning("*");
+
+      const idVenta = nuevaVenta.id_venta;
+
+      // Insertar detalles y actualizar stock
+      for (const it of productos) {
+        await trx("detalle_venta")
+          .insert({
+            id_venta: idVenta,
+            id_producto: it.id_producto,
+            cantidad_detalle_venta: it.cantidad,
+            precio_unitario_venta: it.precio_unitario,
+          });
+
+        // Actualizar stock
+        await trx("productos")
+          .where("id_producto", it.id_producto)
+          .decrement("stock_actual", it.cantidad);
+      }
+
+      // Actualizar total de la venta
+      await trx("ventas")
+        .where("id_venta", idVenta)
+        .update({ total: totalVenta });
+
+      // Verificar warnings por quedar bajo mínimo
+      const after = await getStocks(trx, Array.from(new Set(productos.map(p => p.id_producto))));
+      for (const [idProd, s] of after) {
+        if (s.act < s.min) {
+          warnings.push({
+            code: 'STOCK_BELOW_MIN',
+            message: 'El stock quedó por debajo del mínimo configurado.',
+            meta: { min: s.min, after: s.act, producto_id: idProd }
+          });
+        }
+      }
+
+      return { id_venta: idVenta };
+    });
+
+    res.status(201).json({ 
+      ok: true, 
+      message: 'Venta registrada correctamente.', 
+      id_venta: resultado.id_venta, 
+      warnings: warnings.length > 0 ? warnings : null 
+    });
+  } catch (error) {
+    if (error.message === 'STOCK_NOT_ENOUGH') {
+      const agrupado = agruparCantidades(productos);
+      const ids = Array.from(agrupado.keys());
+      const stocks = await getStocks(db, ids);
+      const insuficientes = [];
+      for (const id of ids) {
+        const reqQty = agrupado.get(id) || 0;
+        const s = stocks.get(id);
+        const disponible = s?.act ?? 0;
+        if (reqQty > disponible) {
+          insuficientes.push({
+            producto_id: id,
+            nombre: s?.nombre || '',
+            solicitado: reqQty,
+            disponible,
+            deficit: reqQty - disponible
+          });
+        }
+      }
       return res.status(400).json({
         code: 'STOCK_NOT_ENOUGH',
         message: 'No hay stock suficiente para completar la venta.',
         items: insuficientes
       });
     }
-
-    // === Registrar venta ===
-    const rId = await connection.execute(`SELECT SEQ_ID_VENTA.NEXTVAL FROM DUAL`);
-    const idVenta = rId.rows[0][0];
-
-    await connection.execute(
-      `INSERT INTO VENTAS (ID_VENTA, FECHA_VENTA, TOTAL_VENTA, VENTA_USUARIO, VENTA_USUARIO_TIPO_ID)
-       VALUES (:id, SYSDATE, 0, :u, :t)`,
-      { id: idVenta, u: usuario, t: tipo_id }
-    );
-
-    for (const it of productos) {
-      await connection.execute(
-        `INSERT INTO DETALLES_VENTAS_PRODUCTOS
-           (ID_DETALLE_VENTA, CANTIDAD_DETALLE_VENTA, PRECIO_UNITARIO_DETALLE_VENTA, PRODUCTO_VENDIDO, VENTA_ID)
-         VALUES (SEQ_ID_DETALLE_VENTA.NEXTVAL, :qty, :pu, :prod, :venta)`,
-        { qty: it.cantidad, pu: it.precio_unitario, prod: it.id_producto, venta: idVenta }
-      );
-
-      await connection.execute(
-        `UPDATE PRODUCTOS
-            SET STOCK_ACTUAL = STOCK_ACTUAL - :qty
-          WHERE ID_PRODUCTO = :prod`,
-        { qty: it.cantidad, prod: it.id_producto }
-      );
-    }
-
-    await connection.execute(
-      `UPDATE VENTAS SET TOTAL_VENTA = :tot WHERE ID_VENTA = :id`,
-      { tot: totalVenta, id: idVenta }
-    );
-
-    // Warnings por quedar bajo mínimo
-    const after = await getStocks(connection, Array.from(new Set(productos.map(p => p.id_producto))));
-    for (const [id, s] of after) {
-      if (s.act < s.min) {
-        warnings.push({
-          code: 'STOCK_BELOW_MIN',
-          message: 'El stock quedó por debajo del mínimo configurado.',
-          meta: { min: s.min, after: s.act, producto_id: id }
-        });
-      }
-    }
-
-    await connection.commit();
-    await connection.close();
-
-    res.status(201).json({ ok: true, message: 'Venta registrada correctamente.', id_venta: idVenta, warnings });
-  } catch (error) {
-    try { await connection?.rollback(); } catch {}
-    try { await connection?.close(); } catch {}
-
-    const nice = mapOracleStockError(error);
-    if (nice) return res.status(400).json({ message: nice });
 
     console.error('Error al registrar venta:', error);
     return res.status(500).json({ message: 'Error al registrar venta.' });
@@ -223,32 +240,47 @@ export const crearVenta = async (req, res) => {
    LISTAR VENTAS
    =========================== */
 export const obtenerVentas = async (_req, res) => {
-  let connection;
   try {
-    connection = await getConnection();
-    const result = await connection.execute(`
-      SELECT 
-        ID_VENTA,
-        TO_CHAR(FECHA_VENTA, 'DD/MM/YYYY') AS FECHA,
-        TOTAL_VENTA,
-        VENTA_USUARIO,
-        VENTA_USUARIO_TIPO_ID
-      FROM VENTAS
-      ORDER BY FECHA_VENTA DESC, ID_VENTA DESC
-    `);
+    const ventas = await db("ventas as v")
+      .join("usuarios as u", function () {
+        this.on(
+          "v.id_tipo_identificacion_usuario",
+          "u.id_tipo_identificacion",
+        ).andOn("v.identificacion_usuario", "u.identificacion_usuario");
+      })
+      .select(
+        "v.id_venta",
+        "v.fecha_venta",
+        "v.total",
+        db.raw(
+          `CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario, ' ', COALESCE(u.apellido2_usuario, '')) as usuario`
+        ),
+        "u.id_tipo_identificacion as tipo_id"
+      )
+      .orderBy("v.fecha_venta", "desc")
+      .orderBy("v.id_venta", "desc");
 
-    const ventas = result.rows.map(r => ({
-      id_venta: r[0],
-      fecha: r[1],
-      total: r[2],
-      usuario: r[3],
-      tipo_id: r[4],
-    }));
+    // Formatear fecha a DD/MM/YYYY
+    const ventasFormateadas = ventas.map(v => {
+      let fecha = '';
+      if (v.fecha_venta) {
+        const d = new Date(v.fecha_venta);
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        fecha = `${dd}/${mm}/${yyyy}`;
+      }
+      return {
+        id_venta: v.id_venta,
+        fecha: fecha,
+        total: Number(v.total),
+        usuario: v.usuario,
+        tipo_id: v.tipo_id
+      };
+    });
 
-    await connection.close();
-    res.json(ventas);
+    res.json(ventasFormateadas);
   } catch (error) {
-    try { await connection?.close(); } catch {}
     console.error('Error al obtener ventas:', error);
     res.status(500).json({ message: 'Error al obtener ventas.' });
   }
@@ -259,60 +291,73 @@ export const obtenerVentas = async (_req, res) => {
    =========================== */
 export const eliminarVenta = async (req, res) => {
   const { id } = req.params;
-  let connection;
   const warnings = [];
+  
   try {
-    connection = await getConnection();
+    await db.transaction(async (trx) => {
+      // Obtener detalles de la venta
+      const detalles = await trx("detalle_venta as dv")
+        .join("productos as p", "dv.id_producto", "p.id_producto")
+        .select(
+          "dv.id_producto",
+          "p.nombre_producto",
+          "p.stock_actual",
+          "p.stock_maximo",
+          "dv.cantidad_detalle_venta"
+        )
+        .where("dv.id_venta", id);
 
-    const det = await connection.execute(
-      `SELECT 
-         P.ID_PRODUCTO,
-         P.NOMBRE_PRODUCTO,
-         P.STOCK_ACTUAL,
-         P.STOCK_MAXIMO,
-         D.CANTIDAD_DETALLE_VENTA
-       FROM DETALLES_VENTAS_PRODUCTOS D
-       JOIN PRODUCTOS P ON P.ID_PRODUCTO = D.PRODUCTO_VENDIDO
-      WHERE D.VENTA_ID = :id`,
-      { id }
-    );
+      if (detalles.length === 0) {
+        throw new Error("VENTA_NO_ENCONTRADA");
+      }
 
-    if (det.rows.length === 0) {
-      await connection.close();
+      // Verificar warnings y restituir stock
+      for (const det of detalles) {
+        const stockActual = Number(det.stock_actual);
+        const cantidad = Number(det.cantidad_detalle_venta);
+        const stockMaximo = Number(det.stock_maximo);
+        const resultante = stockActual + cantidad;
+        
+        if (resultante > stockMaximo) {
+          warnings.push({
+            code: 'STOCK_ABOVE_MAX',
+            message: 'La restitución dejó el stock por encima del máximo configurado.',
+            meta: { 
+              max: stockMaximo, 
+              after: resultante, 
+              producto_id: det.id_producto,
+              nombre: det.nombre_producto
+            }
+          });
+        }
+
+        // Restituir stock
+        await trx("productos")
+          .where("id_producto", det.id_producto)
+          .increment("stock_actual", cantidad);
+      }
+
+      // Eliminar detalles (CASCADE lo hace automático, pero por claridad)
+      await trx("detalle_venta").where("id_venta", id).del();
+
+      // Eliminar venta
+      const eliminados = await trx("ventas").where("id_venta", id).del();
+      
+      if (eliminados === 0) {
+        throw new Error("VENTA_NO_ENCONTRADA");
+      }
+    });
+
+    res.json({ 
+      ok: true, 
+      message: 'Venta eliminada correctamente.', 
+      warnings: warnings.length > 0 ? warnings : null 
+    });
+  } catch (error) {
+    if (error.message === "VENTA_NO_ENCONTRADA") {
       return res.status(404).json({ message: 'Venta no encontrada.' });
     }
 
-    for (const [idProd, , stockAct, stockMax, qty] of det.rows) {
-      const resultante = Number(stockAct) + Number(qty);
-      if (resultante > Number(stockMax)) {
-        warnings.push({
-          code: 'STOCK_ABOVE_MAX',
-          message: 'La restitución dejó el stock por encima del máximo configurado.',
-          meta: { max: Number(stockMax), after: resultante, producto_id: Number(idProd) }
-        });
-      }
-      await connection.execute(
-        `UPDATE PRODUCTOS
-            SET STOCK_ACTUAL = STOCK_ACTUAL + :qty
-          WHERE ID_PRODUCTO = :prod`,
-        { qty, prod: idProd }
-      );
-    }
-
-    await connection.execute(`DELETE FROM DETALLES_VENTAS_PRODUCTOS WHERE VENTA_ID = :id`, { id });
-    const r = await connection.execute(`DELETE FROM VENTAS WHERE ID_VENTA = :id`, { id });
-
-    await connection.commit();
-    await connection.close();
-
-    if (r.rowsAffected === 0) return res.status(404).json({ message: 'Venta no encontrada.' });
-    res.json({ ok: true, message: 'Venta eliminada correctamente.', warnings });
-  } catch (error) {
-    try { await connection?.rollback(); } catch {}
-    try { await connection?.close(); } catch {}
-
-    const nice = mapOracleStockError(error);
-    if (nice) return res.status(400).json({ message: nice });
     console.error('Error al eliminar venta:', error);
     res.status(500).json({ message: 'Error al eliminar venta.' });
   }
@@ -326,7 +371,6 @@ export const actualizarVenta = async (req, res) => {
 
   const authUser = getAuthUser(req);
   if (!authUser) return res.status(401).json({ message: "Usuario no autenticado." });
-  const { email: usuario, tipo_id } = authUser;
 
   const errorItems = validarItemsVenta(req.body?.productos);
   if (errorItems) return res.status(400).json({ message: errorItems });
@@ -345,127 +389,162 @@ export const actualizarVenta = async (req, res) => {
     });
   }
 
-  let connection;
   const warnings = [];
   try {
-    connection = await getConnection();
+    await db.transaction(async (trx) => {
+      // Obtener detalles actuales de la venta
+      const detActual = await trx("detalle_venta")
+        .select("id_producto", "cantidad_detalle_venta")
+        .where("id_venta", id);
 
-    // Detalles actuales de la venta (para reversión lógica)
-    const detActual = await connection.execute(
-      `SELECT PRODUCTO_VENDIDO, CANTIDAD_DETALLE_VENTA
-         FROM DETALLES_VENTAS_PRODUCTOS
-        WHERE VENTA_ID = :id`,
-      { id }
-    );
-    if (detActual.rows.length === 0) {
-      await connection.close();
+      if (detActual.length === 0) {
+        throw new Error("VENTA_NO_ENCONTRADA");
+      }
+
+      // Cantidades anteriores por producto
+      const prevQuantByProd = new Map();
+      for (const det of detActual) {
+        const prodId = det.id_producto;
+        const qty = Number(det.cantidad_detalle_venta);
+        prevQuantByProd.set(prodId, (prevQuantByProd.get(prodId) || 0) + qty);
+      }
+
+      // === BLOQUEAR SOBREVENTA EN ACTUALIZACIÓN ===
+      const ids = Array.from(new Set([...prevQuantByProd.keys(), ...productos.map(p => p.id_producto)]));
+      const stocks = await getStocks(trx, ids);
+
+      const solicitados = agruparCantidades(productos);
+      const insuficientes = [];
+      for (const idProd of solicitados.keys()) {
+        const reqQty = solicitados.get(idProd) || 0;
+        const s = stocks.get(idProd);
+        const base = (s?.act ?? 0) + (prevQuantByProd.get(idProd) || 0);
+        if (reqQty > base) {
+          insuficientes.push({
+            producto_id: idProd,
+            nombre: s?.nombre || '',
+            solicitado: reqQty,
+            disponible: base,
+            deficit: reqQty - base
+          });
+        }
+      }
+      if (insuficientes.length) {
+        throw new Error('STOCK_NOT_ENOUGH');
+      }
+
+      // === Revertir stock anterior ===
+      for (const det of detActual) {
+        const prodId = det.id_producto;
+        const qty = Number(det.cantidad_detalle_venta);
+        const s = stocks.get(prodId) || { act: 0, max: 0 };
+        const resultante = s.act + qty;
+        
+        if (resultante > s.max) {
+          warnings.push({
+            code: 'STOCK_ABOVE_MAX',
+            message: 'La reversión de la venta dejó el stock por encima del máximo configurado.',
+            meta: { max: s.max, after: resultante, producto_id: prodId }
+          });
+        }
+
+        await trx("productos")
+          .where("id_producto", prodId)
+          .increment("stock_actual", qty);
+      }
+
+      // Borrar detalles previos
+      await trx("detalle_venta").where("id_venta", id).del();
+
+      // Insertar nuevos detalles y debitar stock
+      for (const it of productos) {
+        await trx("detalle_venta")
+          .insert({
+            id_venta: id,
+            id_producto: it.id_producto,
+            cantidad_detalle_venta: it.cantidad,
+            precio_unitario_venta: it.precio_unitario,
+          });
+
+        await trx("productos")
+          .where("id_producto", it.id_producto)
+          .decrement("stock_actual", it.cantidad);
+      }
+
+      // Warnings por quedar bajo el mínimo con los nuevos detalles
+      const newIds = Array.from(new Set(productos.map(p => p.id_producto)));
+      const after = await getStocks(trx, newIds);
+      for (const [idProd, s] of after) {
+        if (s.act < s.min) {
+          warnings.push({
+            code: 'STOCK_BELOW_MIN',
+            message: 'El stock quedó por debajo del mínimo configurado.',
+            meta: { min: s.min, after: s.act, producto_id: idProd }
+          });
+        }
+      }
+
+      // Actualizar cabecera
+      const actualizados = await trx("ventas")
+        .where("id_venta", id)
+        .update({
+          total: totalVenta,
+          id_tipo_identificacion_usuario: authUser.tipo_id,
+          identificacion_usuario: authUser.identificacion,
+        });
+
+      if (actualizados === 0) {
+        throw new Error("VENTA_NO_ENCONTRADA");
+      }
+    });
+
+    res.json({ 
+      ok: true, 
+      message: 'Venta actualizada correctamente.', 
+      warnings: warnings.length > 0 ? warnings : null 
+    });
+  } catch (error) {
+    if (error.message === "VENTA_NO_ENCONTRADA") {
       return res.status(404).json({ message: 'Venta no encontrada.' });
     }
 
-    // Cantidades anteriores por producto
-    const prevQuantByProd = new Map();
-    for (const [prod, qty] of detActual.rows) {
-      prevQuantByProd.set(prod, (prevQuantByProd.get(prod) || 0) + Number(qty));
-    }
-
-    // === BLOQUEAR SOBREVENTA EN ACTUALIZACIÓN ===
-    // Disponibilidad base = stock_actual + cantidadAnterior (como si ya hubiéramos devuelto la venta previa)
-    const ids = Array.from(new Set([...prevQuantByProd.keys(), ...productos.map(p => p.id_producto)]));
-    const stocks = await getStocks(connection, ids);
-
-    const solicitados = agruparCantidades(productos);
-    const insuficientes = [];
-    for (const idProd of solicitados.keys()) {
-      const reqQty = solicitados.get(idProd) || 0;
-      const s = stocks.get(idProd);
-      const base = (s?.act ?? 0) + (prevQuantByProd.get(idProd) || 0);
-      if (reqQty > base) {
-        insuficientes.push({
-          producto_id: idProd,
-          nombre: s?.nombre || '',
-          solicitado: reqQty,
-          disponible: base,
-          deficit: reqQty - base
-        });
+    if (error.message === 'STOCK_NOT_ENOUGH') {
+      // Recalcular insuficientes para el error
+      const detActual = await db("detalle_venta")
+        .select("id_producto", "cantidad_detalle_venta")
+        .where("id_venta", id);
+      
+      const prevQuantByProd = new Map();
+      for (const det of detActual) {
+        const prodId = det.id_producto;
+        const qty = Number(det.cantidad_detalle_venta);
+        prevQuantByProd.set(prodId, (prevQuantByProd.get(prodId) || 0) + qty);
       }
-    }
-    if (insuficientes.length) {
-      await connection.close();
+
+      const ids = Array.from(new Set([...prevQuantByProd.keys(), ...productos.map(p => p.id_producto)]));
+      const stocks = await getStocks(db, ids);
+      const solicitados = agruparCantidades(productos);
+      const insuficientes = [];
+      for (const idProd of solicitados.keys()) {
+        const reqQty = solicitados.get(idProd) || 0;
+        const s = stocks.get(idProd);
+        const base = (s?.act ?? 0) + (prevQuantByProd.get(idProd) || 0);
+        if (reqQty > base) {
+          insuficientes.push({
+            producto_id: idProd,
+            nombre: s?.nombre || '',
+            solicitado: reqQty,
+            disponible: base,
+            deficit: reqQty - base
+          });
+        }
+      }
       return res.status(400).json({
         code: 'STOCK_NOT_ENOUGH',
         message: 'No hay stock suficiente para actualizar la venta.',
         items: insuficientes
       });
     }
-
-    // === Revertir stock anterior (puede dejar sobre máximo → warning) ===
-    for (const [prod, qty] of detActual.rows) {
-      const s = stocks.get(prod) || { act: 0, max: 0 };
-      const resultante = s.act + Number(qty);
-      if (resultante > s.max) {
-        warnings.push({
-          code: 'STOCK_ABOVE_MAX',
-          message: 'La reversión de la venta dejó el stock por encima del máximo configurado.',
-          meta: { max: s.max, after: resultante, producto_id: prod }
-        });
-      }
-      await connection.execute(
-        `UPDATE PRODUCTOS SET STOCK_ACTUAL = STOCK_ACTUAL + :qty WHERE ID_PRODUCTO = :prod`,
-        { qty, prod }
-      );
-    }
-
-    // Borrar detalles previos
-    await connection.execute(`DELETE FROM DETALLES_VENTAS_PRODUCTOS WHERE VENTA_ID = :id`, { id });
-
-    // Insertar nuevos detalles y debitar stock
-    for (const it of productos) {
-      await connection.execute(
-        `INSERT INTO DETALLES_VENTAS_PRODUCTOS
-           (ID_DETALLE_VENTA, CANTIDAD_DETALLE_VENTA, PRECIO_UNITARIO_DETALLE_VENTA, PRODUCTO_VENDIDO, VENTA_ID)
-         VALUES (SEQ_ID_DETALLE_VENTA.NEXTVAL, :qty, :pu, :prod, :venta)`,
-        { qty: it.cantidad, pu: it.precio_unitario, prod: it.id_producto, venta: id }
-      );
-      await connection.execute(
-        `UPDATE PRODUCTOS SET STOCK_ACTUAL = STOCK_ACTUAL - :qty WHERE ID_PRODUCTO = :prod`,
-        { qty: it.cantidad, prod: it.id_producto }
-      );
-    }
-
-    // Warnings por quedar bajo el mínimo con los nuevos detalles
-    const newIds = Array.from(new Set(productos.map(p => p.id_producto)));
-    const after = await getStocks(connection, newIds);
-    for (const [idProd, s] of after) {
-      if (s.act < s.min) {
-        warnings.push({
-          code: 'STOCK_BELOW_MIN',
-          message: 'El stock quedó por debajo del mínimo configurado.',
-          meta: { min: s.min, after: s.act, producto_id: idProd }
-        });
-      }
-    }
-
-    // Actualizar cabecera
-    const r = await connection.execute(
-      `UPDATE VENTAS
-          SET TOTAL_VENTA = :tot,
-              VENTA_USUARIO = :u,
-              VENTA_USUARIO_TIPO_ID = :t
-        WHERE ID_VENTA = :id`,
-      { tot: totalVenta, u: usuario, t: tipo_id, id }
-    );
-
-    await connection.commit();
-    await connection.close();
-
-    if (r.rowsAffected === 0) return res.status(404).json({ message: 'Venta no encontrada.' });
-    res.json({ ok: true, message: 'Venta actualizada correctamente.', warnings });
-  } catch (error) {
-    try { await connection?.rollback(); } catch {}
-    try { await connection?.close(); } catch {}
-
-    const nice = mapOracleStockError(error);
-    if (nice) return res.status(400).json({ message: nice });
 
     console.error('Error al actualizar venta:', error);
     res.status(500).json({ message: 'Error al actualizar venta.' });
@@ -478,38 +557,30 @@ export const actualizarVenta = async (req, res) => {
 export const obtenerVentaPorId = async (req, res) => {
   const { id } = req.params;
 
-  let connection;
   try {
-    connection = await getConnection();
+    const venta = await db("ventas")
+      .where("id_venta", id)
+      .first();
 
-    const cab = await connection.execute(
-      `SELECT ID_VENTA, VENTA_USUARIO, VENTA_USUARIO_TIPO_ID
-         FROM VENTAS
-        WHERE ID_VENTA = :id`,
-      { id }
-    );
-    if (cab.rows.length === 0) {
-      await connection.close();
+    if (!venta) {
       return res.status(404).json({ message: 'Venta no encontrada.' });
     }
 
-    const [id_venta, usuario, tipo_id] = cab.rows[0];
+    const detalles = await db("detalle_venta")
+      .select(
+        "id_producto",
+        "cantidad_detalle_venta as cantidad",
+        "precio_unitario_venta as precio_unitario"
+      )
+      .where("id_venta", id);
 
-    const det = await connection.execute(
-      `SELECT PRODUCTO_VENDIDO, CANTIDAD_DETALLE_VENTA, PRECIO_UNITARIO_DETALLE_VENTA
-         FROM DETALLES_VENTAS_PRODUCTOS
-        WHERE VENTA_ID = :id`,
-      { id }
-    );
-
-    const productos = det.rows.map(([id_producto, cantidad, precio_unitario]) => ({
-      id_producto, cantidad, precio_unitario,
-    }));
-
-    await connection.close();
-    res.json({ id_venta, usuario, tipo_id, productos });
+    res.json({ 
+      id_venta: venta.id_venta, 
+      usuario: venta.identificacion_usuario, 
+      tipo_id: venta.id_tipo_identificacion_usuario, 
+      productos: detalles 
+    });
   } catch (error) {
-    try { await connection?.close(); } catch {}
     console.error('Error al obtener venta:', error);
     res.status(500).json({ message: 'Error al obtener venta.' });
   }

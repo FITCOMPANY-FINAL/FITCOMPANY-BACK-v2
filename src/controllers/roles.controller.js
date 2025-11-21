@@ -74,10 +74,16 @@ async function usuariosQueUsan(rolId, limit = 25) {
 export const listarRoles = async (_req, res) => {
   try {
     const roles = await db("roles")
-      .select("id_rol", "nombre_rol", "descripcion_rol")
+      .select("id_rol", "nombre_rol", "descripcion_rol", "activo")
       .orderBy("nombre_rol", "asc");
 
-    res.json(roles);
+    // Mapear activo a estado 'A' o 'I' para compatibilidad con el frontend
+    const rolesMapeados = roles.map(rol => ({
+      ...rol,
+      estado: rol.activo ? 'A' : 'I'
+    }));
+
+    res.json(rolesMapeados);
   } catch (error) {
     console.error("Error al listar roles:", error);
     res.status(500).json({ message: "Error al listar roles." });
@@ -125,6 +131,7 @@ export const crearRol = async (req, res) => {
     await db("roles").insert({
       nombre_rol,
       descripcion_rol: descripcion_rol || null,
+      activo: true, // Por defecto activo
     });
 
     res.status(201).json({ message: "Rol creado correctamente." });
