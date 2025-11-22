@@ -61,22 +61,43 @@ export const login = async (req, res) => {
 
     console.log("✅ Credenciales válidas para:", usuario.email_usuario);
 
-    // Obtener formularios asociados al rol del usuario
-    const formularios = await db("formularios as f")
-      .join("roles_formularios as rf", "f.id_formulario", "rf.id_formulario")
-      .select(
-        "f.id_formulario",
-        "f.titulo_formulario",
-        "f.url_formulario",
-        "f.is_padre",
-        "f.orden_formulario",
-        "f.padre_id",
-      )
-      .where("rf.id_rol", usuario.id_rol)
-      .orderBy([
-        { column: "f.is_padre", order: "desc" },
-        { column: "f.orden_formulario", order: "asc" },
-      ]);
+    // Si es ADMINISTRADOR, obtener TODOS los formularios
+    // Si no, obtener solo los formularios asignados al rol
+    let formularios;
+    
+    if (usuario.nombre_rol === "ADMINISTRADOR") {
+      console.log("🔑 Usuario es ADMINISTRADOR - Acceso completo a todos los formularios");
+      formularios = await db("formularios as f")
+        .select(
+          "f.id_formulario",
+          "f.titulo_formulario",
+          "f.url_formulario",
+          "f.is_padre",
+          "f.orden_formulario",
+          "f.padre_id",
+        )
+        .orderBy([
+          { column: "f.is_padre", order: "desc" },
+          { column: "f.orden_formulario", order: "asc" },
+        ]);
+    } else {
+      // Para otros roles, obtener solo los formularios asignados
+      formularios = await db("formularios as f")
+        .join("roles_formularios as rf", "f.id_formulario", "rf.id_formulario")
+        .select(
+          "f.id_formulario",
+          "f.titulo_formulario",
+          "f.url_formulario",
+          "f.is_padre",
+          "f.orden_formulario",
+          "f.padre_id",
+        )
+        .where("rf.id_rol", usuario.id_rol)
+        .orderBy([
+          { column: "f.is_padre", order: "desc" },
+          { column: "f.orden_formulario", order: "asc" },
+        ]);
+    }
 
     // Mapear formularios a estructura esperada
     // Como los permisos son simples: si existe en roles_formularios = CRUD completo

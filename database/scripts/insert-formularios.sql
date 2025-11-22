@@ -53,7 +53,7 @@ INSERT INTO formularios (titulo_formulario, url_formulario, padre_id, is_padre, 
 VALUES ('Categorías', '/dashboard/categorias', 2, FALSE, 1);
 
 INSERT INTO formularios (titulo_formulario, url_formulario, padre_id, is_padre, orden_formulario)
-VALUES ('Unidades de Medida', '/dashboard/unidades-medida', 2, FALSE, 2);
+VALUES ('Unidades de Medida', '/dashboard/unidades-medidas', 2, FALSE, 2);
 
 INSERT INTO formularios (titulo_formulario, url_formulario, padre_id, is_padre, orden_formulario)
 VALUES ('Productos', '/dashboard/productos', 2, FALSE, 3);
@@ -92,7 +92,7 @@ INSERT INTO formularios (titulo_formulario, url_formulario, padre_id, is_padre, 
 VALUES ('Usuarios', '/dashboard/usuarios', 5, FALSE, 2);
 
 INSERT INTO formularios (titulo_formulario, url_formulario, padre_id, is_padre, orden_formulario)
-VALUES ('Tipos de Identificación', '/dashboard/tipos-identificacion', 5, FALSE, 3);
+VALUES ('Tipos de Identificación', '/dashboard/tipos-identificaciones', 5, FALSE, 3);
 
 -- ============================================
 -- VERIFICACIÓN
