@@ -133,8 +133,11 @@ function validarFechaVenta(fecha) {
  * Listar todas las ventas
  */
 export const listarVentas = async (req, res) => {
+  const { incluir_eliminadas } = req.query;
+
   try {
-    const ventas = await db("ventas as v")
+    // Obtener ventas con información del usuario
+    let query = db("ventas as v")
       .join("usuarios as u", function () {
         this.on(
           "v.id_tipo_identificacion_usuario",
@@ -148,23 +151,60 @@ export const listarVentas = async (req, res) => {
       )
       .select(
         "v.id_venta",
-        "v.fecha_venta",
+        "v.folio",
+        "v.fecha_venta as fecha",
         "v.total",
         "v.cliente_desc",
         "v.estado",
+        "v.es_fiado",
+        "v.saldo_pendiente",
         "v.observaciones",
+        "v.activo",
+        "v.eliminado_en",
+        "v.eliminado_por",
+        "v.motivo_eliminacion",
         "v.creado_en",
         db.raw(
-          `CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario, ' ', COALESCE(u.apellido2_usuario, '')) as nombre_usuario`,
+          `CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario, ' ', COALESCE(u.apellido2_usuario, '')) as usuario`,
         ),
         "u.email_usuario",
         "ti.abreviatura_tipo_identificacion",
         "u.identificacion_usuario",
-      )
+      );
+
+    // Filtrar por activo/eliminado según query param
+    if (incluir_eliminadas !== "true") {
+      query = query.where("v.activo", true);
+    }
+
+    const ventas = await query
+      .orderBy("v.activo", "desc") // Activas primero
       .orderBy("v.fecha_venta", "desc")
       .orderBy("v.id_venta", "desc");
 
-    res.json(ventas);
+    // Para cada venta, obtener los productos vendidos
+    const ventasConProductos = await Promise.all(
+      ventas.map(async (venta) => {
+        const productos = await db("detalle_venta as dv")
+          .join("productos as p", "dv.id_producto", "p.id_producto")
+          .select("p.nombre_producto", "dv.cantidad_detalle_venta as cantidad")
+          .where("dv.id_venta", venta.id_venta)
+          .orderBy("dv.id_detalle_venta");
+
+        // Crear resumen de productos
+        const productosArray = productos.map(
+          (p) => `${p.nombre_producto} (x${Math.floor(p.cantidad)})`,
+        );
+
+        return {
+          ...venta,
+          productos: productosArray, // Array completo para tooltip
+          total_productos: productos.length,
+        };
+      }),
+    );
+
+    res.json(ventasConProductos);
   } catch (error) {
     console.error("Error al listar ventas:", error);
     res.status(500).json({ message: "Error al listar ventas." });
@@ -415,6 +455,17 @@ export const crearVenta = async (req, res) => {
           observaciones: payload.observaciones || null,
         })
         .returning("*");
+
+      // PASO 6.1: Generar folio automáticamente
+      const fechaVenta = new Date(nuevaVenta.fecha_venta);
+      const year = fechaVenta.getFullYear();
+      const folio = `VTA-${year}-${String(nuevaVenta.id_venta).padStart(5, "0")}`;
+
+      await trx("ventas")
+        .where("id_venta", nuevaVenta.id_venta)
+        .update({ folio });
+
+      nuevaVenta.folio = folio;
 
       // PASO 7: Crear detalles de venta
       const detallesCreados = [];
@@ -705,6 +756,54 @@ export const registrarAbono = async (req, res) => {
 };
 
 /**
+ * GET /api/ventas/:id/abonos
+ * Obtener historial de abonos de una venta fiada
+ * Requiere autenticación (JWT)
+ */
+export const obtenerAbonosVenta = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // PASO 1: Verificar que la venta existe
+    const venta = await db("ventas").where("id_venta", id).first();
+
+    if (!venta) {
+      return res.status(404).json({ message: "Venta no encontrada." });
+    }
+
+    // PASO 2: Obtener todos los abonos de la venta
+    const abonos = await db("ventas_pagos as vp")
+      .join("metodos_pago as mp", "vp.id_metodo_pago", "mp.id_metodo_pago")
+      .where("vp.id_venta", id)
+      .select(
+        "vp.id_venta_pago",
+        "vp.fecha_pago",
+        "vp.monto",
+        "mp.nombre_metodo_pago as metodo_pago",
+        "vp.observaciones",
+      )
+      .orderBy("vp.fecha_pago", "desc");
+
+    res.json({
+      ok: true,
+      total: abonos.length,
+      abonos,
+      venta: {
+        id_venta: venta.id_venta,
+        folio: venta.folio,
+        es_fiado: venta.es_fiado,
+        total: venta.total,
+        saldo_pendiente: venta.saldo_pendiente,
+        estado: venta.estado,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Error al obtener abonos de venta:", error);
+    res.status(500).json({ message: "Error al obtener abonos de la venta." });
+  }
+};
+
+/**
  * GET /api/ventas/fiadas
  * Listar todas las ventas fiadas (con filtro opcional por estado)
  */
@@ -779,11 +878,12 @@ export const listarVentasFiadas = async (req, res) => {
 
 /**
  * DELETE /api/ventas/:id
- * Eliminar una venta y revertir el stock
+ * Eliminar una venta (SOFT DELETE) y revertir el stock
  * Requiere autenticación (JWT)
  */
 export const eliminarVenta = async (req, res) => {
   const { id } = req.params;
+  const { motivo } = req.body;
 
   // Validar autenticación
   const authUser = getAuthUser(req);
@@ -793,10 +893,17 @@ export const eliminarVenta = async (req, res) => {
       .json({ message: "Usuario no autenticado. Se requiere token JWT." });
   }
 
+  // Validar motivo (opcional pero recomendado)
+  const motivoFinal =
+    motivo && motivo.trim() ? motivo.trim() : "Sin especificar";
+
   try {
     await db.transaction(async (trx) => {
-      // PASO 1: Verificar que la venta existe
-      const venta = await trx("ventas").where("id_venta", id).first();
+      // PASO 1: Verificar que la venta existe y está activa
+      const venta = await trx("ventas")
+        .where("id_venta", id)
+        .where("activo", true)
+        .first();
 
       if (!venta) {
         throw new Error("VENTA_NO_ENCONTRADA");
@@ -830,17 +937,23 @@ export const eliminarVenta = async (req, res) => {
           .update({ stock_actual: nuevoStock });
       }
 
-      // PASO 4: Eliminar pagos (CASCADE lo hace automático)
-      await trx("ventas_pagos").where("id_venta", id).del();
-
-      // PASO 5: Eliminar detalles (CASCADE lo hace automático)
-      await trx("detalle_venta").where("id_venta", id).del();
-
-      // PASO 6: Eliminar venta
-      await trx("ventas").where("id_venta", id).del();
+      // PASO 4: SOFT DELETE - Marcar como inactiva en lugar de eliminar
+      await trx("ventas")
+        .where("id_venta", id)
+        .update({
+          activo: false,
+          eliminado_en: trx.fn.now(),
+          eliminado_por: `${authUser.tipo_id}-${authUser.identificacion}`,
+          motivo_eliminacion: motivoFinal,
+        });
     });
 
-    console.log(`✅ Venta ${id} eliminada y stock revertido`);
+    console.log(
+      `✅ Venta ${id} marcada como eliminada (soft delete) y stock revertido`,
+    );
+    console.log(
+      `   Eliminada por: ${authUser.tipo_id}-${authUser.identificacion}`,
+    );
 
     res.json({
       message: "Venta eliminada correctamente y stock revertido.",
@@ -849,7 +962,9 @@ export const eliminarVenta = async (req, res) => {
     console.error("❌ Error al eliminar venta:", error);
 
     if (error.message === "VENTA_NO_ENCONTRADA") {
-      return res.status(404).json({ message: "Venta no encontrada." });
+      return res
+        .status(404)
+        .json({ message: "Venta no encontrada o ya fue eliminada." });
     }
 
     if (error.message && error.message.includes("ya no existe")) {

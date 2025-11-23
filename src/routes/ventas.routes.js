@@ -5,6 +5,7 @@ import {
   crearVenta,
   eliminarVenta,
   registrarAbono,
+  obtenerAbonosVenta,
   listarVentasFiadas,
 } from "../controllers/ventas.controller.js";
 import { authRequired } from "../middlewares/authMiddleware.js";
@@ -15,6 +16,7 @@ const router = Router();
 router.get("/ventas", listarVentas);
 router.get("/ventas/fiadas", listarVentasFiadas); // IMPORTANTE: Esta ruta ANTES de /ventas/:id
 router.get("/ventas/:id", obtenerVentaPorId);
+router.get("/ventas/:id/abonos", authRequired, obtenerAbonosVenta);
 
 // POST/DELETE protegidas
 router.post("/ventas", authRequired, crearVenta);
