@@ -124,7 +124,7 @@ export const reporteVentas = async (req, res) => {
     const ventasPorDia = await db("ventas")
       .whereBetween("fecha_venta", [rango.inicio, rango.fin])
       .select(
-        db.raw("DATE(fecha_venta) as fecha"),
+        db.raw("DATE(fecha_venta)::text as fecha"),
         db.raw("COUNT(*) as cantidad"),
         db.raw("COALESCE(SUM(total), 0) as total"),
       )
@@ -137,9 +137,14 @@ export const reporteVentas = async (req, res) => {
       rango.fin_format,
     );
     const ventasPorDiaCompleto = todasLasFechas.map((fecha) => {
-      const ventaDelDia = ventasPorDia.find((v) => v.fecha === fecha);
+      // Normalizar formato de fecha para comparación
+      const fechaNormalizada = fecha.split('T')[0];
+      const ventaDelDia = ventasPorDia.find((v) => {
+        const fechaVenta = v.fecha ? v.fecha.split('T')[0] : null;
+        return fechaVenta === fechaNormalizada;
+      });
       return {
-        fecha,
+        fecha: fechaNormalizada,
         cantidad: ventaDelDia ? Number(ventaDelDia.cantidad) : 0,
         total: ventaDelDia ? Number(ventaDelDia.total) : 0,
       };
@@ -241,7 +246,7 @@ export const reporteCompras = async (req, res) => {
     const comprasPorDia = await db("compras")
       .whereBetween("fecha_compra", [rango.inicio, rango.fin])
       .select(
-        db.raw("DATE(fecha_compra) as fecha"),
+        db.raw("DATE(fecha_compra)::text as fecha"),
         db.raw("COUNT(*) as cantidad"),
         db.raw("COALESCE(SUM(total), 0) as total"),
       )
@@ -254,9 +259,14 @@ export const reporteCompras = async (req, res) => {
       rango.fin_format,
     );
     const comprasPorDiaCompleto = todasLasFechas.map((fecha) => {
-      const compraDelDia = comprasPorDia.find((c) => c.fecha === fecha);
+      // Normalizar formato de fecha para comparación
+      const fechaNormalizada = fecha.split('T')[0];
+      const compraDelDia = comprasPorDia.find((c) => {
+        const fechaCompra = c.fecha ? c.fecha.split('T')[0] : null;
+        return fechaCompra === fechaNormalizada;
+      });
       return {
-        fecha,
+        fecha: fechaNormalizada,
         cantidad: compraDelDia ? Number(compraDelDia.cantidad) : 0,
         total: compraDelDia ? Number(compraDelDia.total) : 0,
       };
@@ -337,9 +347,9 @@ export const dashboard = async (req, res) => {
   try {
     const ahora = new Date();
 
-    // Rango de hoy
-    const hoyInicio = new Date(ahora.setHours(0, 0, 0, 0)).toISOString();
-    const hoyFin = new Date(ahora.setHours(23, 59, 59, 999)).toISOString();
+    // Rango de hoy (corregido para evitar mutación)
+    const hoyInicio = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), 0, 0, 0, 0).toISOString();
+    const hoyFin = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), 23, 59, 59, 999).toISOString();
 
     // Rango del mes actual
     const mesInicio = new Date(
@@ -362,8 +372,9 @@ export const dashboard = async (req, res) => {
     ).toISOString();
 
     // ========== VENTAS DE HOY ==========
+    // Usar DATE() para comparar solo la fecha, sin importar la hora
     const ventasHoy = await db("ventas")
-      .whereBetween("fecha_venta", [hoyInicio, hoyFin])
+      .whereRaw("DATE(fecha_venta) = CURRENT_DATE")
       .select(
         db.raw("COUNT(*) as cantidad"),
         db.raw("COALESCE(SUM(total), 0) as total"),
@@ -371,8 +382,9 @@ export const dashboard = async (req, res) => {
       .first();
 
     // ========== COMPRAS DE HOY ==========
+    // Usar DATE() para comparar solo la fecha, sin importar la hora
     const comprasHoy = await db("compras")
-      .whereBetween("fecha_compra", [hoyInicio, hoyFin])
+      .whereRaw("DATE(fecha_compra) = CURRENT_DATE")
       .select(
         db.raw("COUNT(*) as cantidad"),
         db.raw("COALESCE(SUM(total), 0) as total"),
@@ -406,10 +418,10 @@ export const dashboard = async (req, res) => {
       .select(
         db.raw("COUNT(*) as total_productos"),
         db.raw(
-          "SUM(CASE WHEN stock_actual < stock_minimo THEN 1 ELSE 0 END) as productos_criticos",
+          "SUM(CASE WHEN stock_actual > stock_maximo THEN 1 ELSE 0 END) as productos_sobre_maximo",
         ),
         db.raw(
-          "SUM(CASE WHEN stock_actual < (stock_minimo * 1.5) AND stock_actual >= stock_minimo THEN 1 ELSE 0 END) as productos_bajos",
+          "SUM(CASE WHEN stock_actual < stock_minimo THEN 1 ELSE 0 END) as productos_bajo_minimo",
         ),
         db.raw(
           "COALESCE(SUM(stock_actual * precio_costo), 0) as valor_inventario",
@@ -417,8 +429,22 @@ export const dashboard = async (req, res) => {
       )
       .first();
 
-    // ========== PRODUCTOS CON STOCK CRÍTICO ==========
-    const stockCritico = await db("productos")
+    // ========== PRODUCTOS POR ENCIMA DEL STOCK MÁXIMO ==========
+    const productosSobreMaximo = await db("productos")
+      .where("activo", true)
+      .where("stock_actual", ">", db.raw("stock_maximo"))
+      .select(
+        "id_producto",
+        "nombre_producto",
+        "stock_actual",
+        "stock_maximo",
+        db.raw("(stock_actual - stock_maximo) as exceso"),
+      )
+      .orderBy("exceso", "desc")
+      .limit(5);
+
+    // ========== PRODUCTOS BAJO DEL STOCK MÍNIMO ==========
+    const productosBajoMinimo = await db("productos")
       .where("activo", true)
       .where("stock_actual", "<", db.raw("stock_minimo"))
       .select(
@@ -499,10 +525,17 @@ export const dashboard = async (req, res) => {
       },
       inventario: {
         total_productos: Number(inventario.total_productos),
-        productos_criticos: Number(inventario.productos_criticos),
-        productos_bajos: Number(inventario.productos_bajos),
+        productos_sobre_maximo: Number(inventario.productos_sobre_maximo),
+        productos_bajo_minimo: Number(inventario.productos_bajo_minimo),
         valor_total: Number(inventario.valor_inventario),
-        stock_critico: stockCritico.map((p) => ({
+        productos_sobre_maximo_lista: productosSobreMaximo.map((p) => ({
+          id_producto: p.id_producto,
+          nombre: p.nombre_producto,
+          stock_actual: Number(p.stock_actual),
+          stock_maximo: Number(p.stock_maximo),
+          exceso: Number(p.exceso),
+        })),
+        productos_bajo_minimo_lista: productosBajoMinimo.map((p) => ({
           id_producto: p.id_producto,
           nombre: p.nombre_producto,
           stock_actual: Number(p.stock_actual),
