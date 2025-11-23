@@ -133,9 +133,11 @@ function validarFechaVenta(fecha) {
  * Listar todas las ventas
  */
 export const listarVentas = async (req, res) => {
+  const { incluir_eliminadas } = req.query;
+
   try {
     // Obtener ventas con información del usuario
-    const ventas = await db("ventas as v")
+    let query = db("ventas as v")
       .join("usuarios as u", function () {
         this.on(
           "v.id_tipo_identificacion_usuario",
@@ -158,6 +160,9 @@ export const listarVentas = async (req, res) => {
         "v.saldo_pendiente",
         "v.observaciones",
         "v.activo",
+        "v.eliminado_en",
+        "v.eliminado_por",
+        "v.motivo_eliminacion",
         "v.creado_en",
         db.raw(
           `CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario, ' ', COALESCE(u.apellido2_usuario, '')) as usuario`,
@@ -165,8 +170,15 @@ export const listarVentas = async (req, res) => {
         "u.email_usuario",
         "ti.abreviatura_tipo_identificacion",
         "u.identificacion_usuario",
-      )
-      .where("v.activo", true)
+      );
+
+    // Filtrar por activo/eliminado según query param
+    if (incluir_eliminadas !== "true") {
+      query = query.where("v.activo", true);
+    }
+
+    const ventas = await query
+      .orderBy("v.activo", "desc") // Activas primero
       .orderBy("v.fecha_venta", "desc")
       .orderBy("v.id_venta", "desc");
 
@@ -871,6 +883,7 @@ export const listarVentasFiadas = async (req, res) => {
  */
 export const eliminarVenta = async (req, res) => {
   const { id } = req.params;
+  const { motivo } = req.body;
 
   // Validar autenticación
   const authUser = getAuthUser(req);
@@ -879,6 +892,10 @@ export const eliminarVenta = async (req, res) => {
       .status(401)
       .json({ message: "Usuario no autenticado. Se requiere token JWT." });
   }
+
+  // Validar motivo (opcional pero recomendado)
+  const motivoFinal =
+    motivo && motivo.trim() ? motivo.trim() : "Sin especificar";
 
   try {
     await db.transaction(async (trx) => {
@@ -927,7 +944,7 @@ export const eliminarVenta = async (req, res) => {
           activo: false,
           eliminado_en: trx.fn.now(),
           eliminado_por: `${authUser.tipo_id}-${authUser.identificacion}`,
-          motivo_eliminacion: "Eliminada desde el sistema",
+          motivo_eliminacion: motivoFinal,
         });
     });
 
