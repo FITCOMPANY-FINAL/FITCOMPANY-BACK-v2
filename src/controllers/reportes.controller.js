@@ -17,8 +17,10 @@ function calcularRangoFechas(periodo, fecha_inicio = null, fecha_fin = null) {
   } else {
     switch (periodo) {
       case "hoy":
-        inicio = new Date(ahora.setHours(0, 0, 0, 0));
-        fin = new Date(ahora.setHours(23, 59, 59, 999));
+        inicio = new Date(ahora);
+        inicio.setHours(0, 0, 0, 0);
+        fin = new Date(ahora);
+        fin.setHours(23, 59, 59, 999);
         break;
 
       case "semanal":
@@ -98,12 +100,24 @@ export const reporteVentas = async (req, res) => {
     // Calcular rango de fechas
     const rango = calcularRangoFechas(periodo, fecha_inicio, fecha_fin);
 
-    // RESUMEN GENERAL
+    // RESUMEN GENERAL (solo ventas activas)
+    // Calcular totales: contado = total completo, fiado = solo lo pagado (total - saldo_pendiente)
     const resumen = await db("ventas")
       .whereBetween("fecha_venta", [rango.inicio, rango.fin])
+      .where("activo", true)
       .select(
         db.raw("COUNT(*) as cantidad_ventas"),
-        db.raw("COALESCE(SUM(total), 0) as total_ventas"),
+        // Total pagado: contado = total, fiado = total - saldo_pendiente
+        db.raw(`
+          COALESCE(
+            SUM(CASE 
+              WHEN es_fiado = false THEN total 
+              ELSE (total - saldo_pendiente) 
+            END), 
+            0
+          ) as total_pagado
+        `),
+        db.raw("COALESCE(SUM(total), 0) as total_ventas"), // Total de ventas (para referencia)
         db.raw("COALESCE(ROUND(AVG(total)::numeric, 2), 0) as venta_promedio"),
         db.raw(
           "SUM(CASE WHEN es_fiado = false THEN 1 ELSE 0 END) as ventas_contado",
@@ -111,22 +125,37 @@ export const reporteVentas = async (req, res) => {
         db.raw(
           "SUM(CASE WHEN es_fiado = true THEN 1 ELSE 0 END) as ventas_fiadas",
         ),
+        // Total contado: usa el total completo de la venta
         db.raw(
           "COALESCE(SUM(CASE WHEN es_fiado = false THEN total ELSE 0 END), 0) as total_contado",
         ),
-        db.raw(
-          "COALESCE(SUM(CASE WHEN es_fiado = true THEN total ELSE 0 END), 0) as total_fiado",
-        ),
+        // Total fiado: usa total - saldo_pendiente (lo que realmente se pagó)
+        db.raw(`
+          COALESCE(
+            SUM(CASE WHEN es_fiado = true THEN (total - saldo_pendiente) ELSE 0 END), 
+            0
+          ) as total_fiado
+        `),
       )
       .first();
 
-    // VENTAS POR DÍA
+    // VENTAS POR DÍA (solo ventas activas) - usando pagos reales
+    // Contado = total completo, Fiado = total - saldo_pendiente (lo pagado)
     const ventasPorDia = await db("ventas")
       .whereBetween("fecha_venta", [rango.inicio, rango.fin])
+      .where("activo", true)
       .select(
         db.raw("DATE(fecha_venta)::text as fecha"),
         db.raw("COUNT(*) as cantidad"),
-        db.raw("COALESCE(SUM(total), 0) as total"),
+        db.raw(`
+          COALESCE(
+            SUM(CASE 
+              WHEN es_fiado = false THEN total 
+              ELSE (total - saldo_pendiente) 
+            END), 
+            0
+          ) as total
+        `),
       )
       .groupBy(db.raw("DATE(fecha_venta)"))
       .orderBy("fecha", "asc");
@@ -150,11 +179,12 @@ export const reporteVentas = async (req, res) => {
       };
     });
 
-    // PRODUCTOS MÁS VENDIDOS
+    // PRODUCTOS MÁS VENDIDOS (solo ventas activas)
     const productosMasVendidos = await db("detalle_venta as dv")
       .join("productos as p", "dv.id_producto", "p.id_producto")
       .join("ventas as v", "dv.id_venta", "v.id_venta")
       .whereBetween("v.fecha_venta", [rango.inicio, rango.fin])
+      .where("v.activo", true)
       .select(
         "p.id_producto",
         "p.nombre_producto",
@@ -165,7 +195,8 @@ export const reporteVentas = async (req, res) => {
       .orderBy("unidades_vendidas", "desc")
       .limit(5);
 
-    // VENTAS POR USUARIO (VENDEDOR)
+    // VENTAS POR USUARIO (VENDEDOR) (solo ventas activas) - usando pagos reales
+    // Contado = total completo, Fiado = total - saldo_pendiente (lo pagado)
     const ventasPorUsuario = await db("ventas as v")
       .join("usuarios as u", function () {
         this.on(
@@ -174,15 +205,51 @@ export const reporteVentas = async (req, res) => {
         ).andOn("v.identificacion_usuario", "u.identificacion_usuario");
       })
       .whereBetween("v.fecha_venta", [rango.inicio, rango.fin])
+      .where("v.activo", true)
       .select(
         db.raw(
           "CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario) as nombre_usuario",
         ),
         db.raw("COUNT(v.id_venta) as cantidad_ventas"),
-        db.raw("COALESCE(SUM(v.total), 0) as total_vendido"),
+        db.raw(`
+          COALESCE(
+            SUM(CASE 
+              WHEN v.es_fiado = false THEN v.total 
+              ELSE (v.total - v.saldo_pendiente) 
+            END), 
+            0
+          ) as total_vendido
+        `),
       )
       .groupBy("u.nombres_usuario", "u.apellido1_usuario")
       .orderBy("total_vendido", "desc");
+
+    // CARTERA: Ventas con saldo pendiente (solo ventas activas en el período)
+    const cartera = await db("ventas as v")
+      .whereBetween("v.fecha_venta", [rango.inicio, rango.fin])
+      .where("v.activo", true)
+      .where("v.saldo_pendiente", ">", 0)
+      .select(
+        "v.id_venta",
+        "v.folio",
+        "v.fecha_venta",
+        "v.total",
+        "v.saldo_pendiente",
+        "v.cliente_desc",
+        "v.es_fiado",
+        db.raw("(v.total - v.saldo_pendiente) as pagado"),
+        db.raw(
+          "CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario) as vendedor",
+        ),
+      )
+      .join("usuarios as u", function () {
+        this.on(
+          "v.id_tipo_identificacion_usuario",
+          "u.id_tipo_identificacion",
+        ).andOn("v.identificacion_usuario", "u.identificacion_usuario");
+      })
+      .orderBy("v.saldo_pendiente", "desc")
+      .orderBy("v.fecha_venta", "desc");
 
     // RESPUESTA
     res.json({
@@ -194,7 +261,7 @@ export const reporteVentas = async (req, res) => {
         dias: todasLasFechas.length,
       },
       resumen: {
-        total_ventas: Number(resumen.total_ventas),
+        total_ventas: Number(resumen.total_pagado), // Cambiado: usar total pagado
         cantidad_ventas: Number(resumen.cantidad_ventas),
         venta_promedio: Number(resumen.venta_promedio),
         ventas_contado: Number(resumen.ventas_contado),
@@ -214,6 +281,20 @@ export const reporteVentas = async (req, res) => {
         ventas: Number(v.cantidad_ventas),
         total: Number(v.total_vendido),
       })),
+      cartera: {
+        total_por_cobrar: cartera.reduce((sum, v) => sum + Number(v.saldo_pendiente), 0),
+        cantidad_ventas_pendientes: cartera.length,
+        ventas_pendientes: cartera.map((v) => ({
+          id_venta: v.id_venta,
+          folio: v.folio,
+          fecha: v.fecha_venta,
+          total: Number(v.total),
+          pagado: Number(v.pagado),
+          saldo_pendiente: Number(v.saldo_pendiente),
+          cliente: v.cliente_desc,
+          vendedor: v.vendedor,
+        })),
+      },
     });
   } catch (error) {
     console.error("Error al generar reporte de ventas:", error);
@@ -234,7 +315,10 @@ export const reporteCompras = async (req, res) => {
 
     // RESUMEN GENERAL
     const resumen = await db("compras")
-      .whereBetween("fecha_compra", [rango.inicio, rango.fin])
+      .whereRaw("DATE(fecha_compra) >= DATE(?) AND DATE(fecha_compra) <= DATE(?)", [
+        rango.inicio_format,
+        rango.fin_format,
+      ])
       .select(
         db.raw("COUNT(*) as cantidad_compras"),
         db.raw("COALESCE(SUM(total), 0) as total_compras"),
@@ -244,7 +328,10 @@ export const reporteCompras = async (req, res) => {
 
     // COMPRAS POR DÍA
     const comprasPorDia = await db("compras")
-      .whereBetween("fecha_compra", [rango.inicio, rango.fin])
+      .whereRaw("DATE(fecha_compra) >= DATE(?) AND DATE(fecha_compra) <= DATE(?)", [
+        rango.inicio_format,
+        rango.fin_format,
+      ])
       .select(
         db.raw("DATE(fecha_compra)::text as fecha"),
         db.raw("COUNT(*) as cantidad"),
@@ -276,7 +363,10 @@ export const reporteCompras = async (req, res) => {
     const productosMasComprados = await db("detalle_compra as dc")
       .join("productos as p", "dc.id_producto", "p.id_producto")
       .join("compras as c", "dc.id_compra", "c.id_compra")
-      .whereBetween("c.fecha_compra", [rango.inicio, rango.fin])
+      .whereRaw("DATE(c.fecha_compra) >= DATE(?) AND DATE(c.fecha_compra) <= DATE(?)", [
+        rango.inicio_format,
+        rango.fin_format,
+      ])
       .select(
         "p.id_producto",
         "p.nombre_producto",
@@ -295,7 +385,10 @@ export const reporteCompras = async (req, res) => {
           "u.id_tipo_identificacion",
         ).andOn("c.identificacion_usuario", "u.identificacion_usuario");
       })
-      .whereBetween("c.fecha_compra", [rango.inicio, rango.fin])
+      .whereRaw("DATE(c.fecha_compra) >= DATE(?) AND DATE(c.fecha_compra) <= DATE(?)", [
+        rango.inicio_format,
+        rango.fin_format,
+      ])
       .select(
         db.raw(
           "CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario) as nombre_usuario",
