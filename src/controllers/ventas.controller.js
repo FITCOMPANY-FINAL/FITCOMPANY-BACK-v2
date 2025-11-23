@@ -744,6 +744,54 @@ export const registrarAbono = async (req, res) => {
 };
 
 /**
+ * GET /api/ventas/:id/abonos
+ * Obtener historial de abonos de una venta fiada
+ * Requiere autenticación (JWT)
+ */
+export const obtenerAbonosVenta = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // PASO 1: Verificar que la venta existe
+    const venta = await db("ventas").where("id_venta", id).first();
+
+    if (!venta) {
+      return res.status(404).json({ message: "Venta no encontrada." });
+    }
+
+    // PASO 2: Obtener todos los abonos de la venta
+    const abonos = await db("ventas_pagos as vp")
+      .join("metodos_pago as mp", "vp.id_metodo_pago", "mp.id_metodo_pago")
+      .where("vp.id_venta", id)
+      .select(
+        "vp.id_venta_pago",
+        "vp.fecha_pago",
+        "vp.monto",
+        "mp.nombre_metodo_pago as metodo_pago",
+        "vp.observaciones",
+      )
+      .orderBy("vp.fecha_pago", "desc");
+
+    res.json({
+      ok: true,
+      total: abonos.length,
+      abonos,
+      venta: {
+        id_venta: venta.id_venta,
+        folio: venta.folio,
+        es_fiado: venta.es_fiado,
+        total: venta.total,
+        saldo_pendiente: venta.saldo_pendiente,
+        estado: venta.estado,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Error al obtener abonos de venta:", error);
+    res.status(500).json({ message: "Error al obtener abonos de la venta." });
+  }
+};
+
+/**
  * GET /api/ventas/fiadas
  * Listar todas las ventas fiadas (con filtro opcional por estado)
  */
