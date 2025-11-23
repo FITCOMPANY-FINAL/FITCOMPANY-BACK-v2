@@ -148,19 +148,24 @@ export const listarVentas = async (req, res) => {
       )
       .select(
         "v.id_venta",
-        "v.fecha_venta",
+        "v.folio",
+        "v.fecha_venta as fecha",
         "v.total",
         "v.cliente_desc",
         "v.estado",
+        "v.es_fiado",
+        "v.saldo_pendiente",
         "v.observaciones",
+        "v.activo",
         "v.creado_en",
         db.raw(
-          `CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario, ' ', COALESCE(u.apellido2_usuario, '')) as nombre_usuario`,
+          `CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario, ' ', COALESCE(u.apellido2_usuario, '')) as usuario`,
         ),
         "u.email_usuario",
         "ti.abreviatura_tipo_identificacion",
         "u.identificacion_usuario",
       )
+      .where("v.activo", true)
       .orderBy("v.fecha_venta", "desc")
       .orderBy("v.id_venta", "desc");
 
