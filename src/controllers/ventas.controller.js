@@ -134,6 +134,7 @@ function validarFechaVenta(fecha) {
  */
 export const listarVentas = async (req, res) => {
   try {
+    // Obtener ventas con información del usuario
     const ventas = await db("ventas as v")
       .join("usuarios as u", function () {
         this.on(
@@ -169,7 +170,29 @@ export const listarVentas = async (req, res) => {
       .orderBy("v.fecha_venta", "desc")
       .orderBy("v.id_venta", "desc");
 
-    res.json(ventas);
+    // Para cada venta, obtener los productos vendidos
+    const ventasConProductos = await Promise.all(
+      ventas.map(async (venta) => {
+        const productos = await db("detalle_venta as dv")
+          .join("productos as p", "dv.id_producto", "p.id_producto")
+          .select("p.nombre_producto", "dv.cantidad_detalle_venta as cantidad")
+          .where("dv.id_venta", venta.id_venta)
+          .orderBy("dv.id_detalle_venta");
+
+        // Crear resumen de productos
+        const productosArray = productos.map(
+          (p) => `${p.nombre_producto} (x${Math.floor(p.cantidad)})`,
+        );
+
+        return {
+          ...venta,
+          productos: productosArray, // Array completo para tooltip
+          total_productos: productos.length,
+        };
+      }),
+    );
+
+    res.json(ventasConProductos);
   } catch (error) {
     console.error("Error al listar ventas:", error);
     res.status(500).json({ message: "Error al listar ventas." });
