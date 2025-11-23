@@ -141,7 +141,26 @@ export const listarCompras = async (req, res) => {
       .orderBy("c.fecha_compra", "desc")
       .orderBy("c.id_compra", "desc");
 
-    res.json(compras);
+    // Obtener detalles de productos para cada compra
+    const comprasConDetalles = await Promise.all(
+      compras.map(async (compra) => {
+        const detalles = await db("detalle_compra as dc")
+          .join("productos as p", "dc.id_producto", "p.id_producto")
+          .select(
+            "p.nombre_producto",
+            "dc.cantidad_detalle_compra",
+          )
+          .where("dc.id_compra", compra.id_compra)
+          .orderBy("dc.id_detalle_compra");
+
+        return {
+          ...compra,
+          detalles: detalles,
+        };
+      })
+    );
+
+    res.json(comprasConDetalles);
   } catch (error) {
     console.error("Error al listar compras:", error);
     res.status(500).json({ message: "Error al listar compras." });
