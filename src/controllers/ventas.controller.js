@@ -795,7 +795,7 @@ export const listarVentasFiadas = async (req, res) => {
 
 /**
  * DELETE /api/ventas/:id
- * Eliminar una venta y revertir el stock
+ * Eliminar una venta (SOFT DELETE) y revertir el stock
  * Requiere autenticación (JWT)
  */
 export const eliminarVenta = async (req, res) => {
@@ -811,8 +811,11 @@ export const eliminarVenta = async (req, res) => {
 
   try {
     await db.transaction(async (trx) => {
-      // PASO 1: Verificar que la venta existe
-      const venta = await trx("ventas").where("id_venta", id).first();
+      // PASO 1: Verificar que la venta existe y está activa
+      const venta = await trx("ventas")
+        .where("id_venta", id)
+        .where("activo", true)
+        .first();
 
       if (!venta) {
         throw new Error("VENTA_NO_ENCONTRADA");
@@ -846,17 +849,23 @@ export const eliminarVenta = async (req, res) => {
           .update({ stock_actual: nuevoStock });
       }
 
-      // PASO 4: Eliminar pagos (CASCADE lo hace automático)
-      await trx("ventas_pagos").where("id_venta", id).del();
-
-      // PASO 5: Eliminar detalles (CASCADE lo hace automático)
-      await trx("detalle_venta").where("id_venta", id).del();
-
-      // PASO 6: Eliminar venta
-      await trx("ventas").where("id_venta", id).del();
+      // PASO 4: SOFT DELETE - Marcar como inactiva en lugar de eliminar
+      await trx("ventas")
+        .where("id_venta", id)
+        .update({
+          activo: false,
+          eliminado_en: trx.fn.now(),
+          eliminado_por: `${authUser.tipo_id}-${authUser.identificacion}`,
+          motivo_eliminacion: "Eliminada desde el sistema",
+        });
     });
 
-    console.log(`✅ Venta ${id} eliminada y stock revertido`);
+    console.log(
+      `✅ Venta ${id} marcada como eliminada (soft delete) y stock revertido`,
+    );
+    console.log(
+      `   Eliminada por: ${authUser.tipo_id}-${authUser.identificacion}`,
+    );
 
     res.json({
       message: "Venta eliminada correctamente y stock revertido.",
@@ -865,7 +874,9 @@ export const eliminarVenta = async (req, res) => {
     console.error("❌ Error al eliminar venta:", error);
 
     if (error.message === "VENTA_NO_ENCONTRADA") {
-      return res.status(404).json({ message: "Venta no encontrada." });
+      return res
+        .status(404)
+        .json({ message: "Venta no encontrada o ya fue eliminada." });
     }
 
     if (error.message && error.message.includes("ya no existe")) {
