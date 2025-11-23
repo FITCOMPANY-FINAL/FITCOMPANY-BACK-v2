@@ -416,6 +416,17 @@ export const crearVenta = async (req, res) => {
         })
         .returning("*");
 
+      // PASO 6.1: Generar folio automáticamente
+      const fechaVenta = new Date(nuevaVenta.fecha_venta);
+      const year = fechaVenta.getFullYear();
+      const folio = `VTA-${year}-${String(nuevaVenta.id_venta).padStart(5, "0")}`;
+
+      await trx("ventas")
+        .where("id_venta", nuevaVenta.id_venta)
+        .update({ folio });
+
+      nuevaVenta.folio = folio;
+
       // PASO 7: Crear detalles de venta
       const detallesCreados = [];
 
