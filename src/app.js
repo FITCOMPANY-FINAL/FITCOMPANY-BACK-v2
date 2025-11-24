@@ -3,6 +3,7 @@ dotenv.config();
 import express, { json, urlencoded } from "express";
 import cors from "cors";
 import morgan from "morgan";
+import { initializeDatabase } from "./utils/initializeDatabase.js";
 
 // ============================================
 // RUTAS MIGRADAS A POSTGRESQL ✅
@@ -63,8 +64,18 @@ app.get("/", (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`✅ Servidor activo en http://localhost:${PORT}`);
-  console.log(`📊 Base de datos: PostgreSQL`);
-  console.log(`🎉 Controladores migrados: 12/12 (100% COMPLETO ✅)`);
-});
+// Inicializar base de datos y luego iniciar servidor
+(async () => {
+  try {
+    await initializeDatabase();
+
+    app.listen(PORT, () => {
+      console.log(`✅ Servidor activo en http://localhost:${PORT}`);
+      console.log(`📊 Base de datos: PostgreSQL`);
+      console.log(`🎉 Controladores migrados: 12/12 (100% COMPLETO ✅)`);
+    });
+  } catch (error) {
+    console.error("❌ Error fatal al iniciar:", error.message);
+    process.exit(1);
+  }
+})();
