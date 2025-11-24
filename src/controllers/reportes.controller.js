@@ -226,6 +226,12 @@ export const reporteVentas = async (req, res) => {
 
     // CARTERA: Ventas con saldo pendiente (solo ventas activas en el período)
     const cartera = await db("ventas as v")
+      .join("usuarios as u", function () {
+        this.on(
+          "v.id_tipo_identificacion_usuario",
+          "u.id_tipo_identificacion",
+        ).andOn("v.identificacion_usuario", "u.identificacion_usuario");
+      })
       .whereBetween("v.fecha_venta", [rango.inicio, rango.fin])
       .where("v.activo", true)
       .where("v.saldo_pendiente", ">", 0)
@@ -242,12 +248,6 @@ export const reporteVentas = async (req, res) => {
           "CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario) as vendedor",
         ),
       )
-      .join("usuarios as u", function () {
-        this.on(
-          "v.id_tipo_identificacion_usuario",
-          "u.id_tipo_identificacion",
-        ).andOn("v.identificacion_usuario", "u.identificacion_usuario");
-      })
       .orderBy("v.saldo_pendiente", "desc")
       .orderBy("v.fecha_venta", "desc");
 
