@@ -16,6 +16,7 @@ import formulariosRoutes from "./routes/formularios.routes.js";
 import permisosRoutes from "./routes/permisos.routes.js";
 import usuariosRoutes from "./routes/usuarios.routes.js";
 import setupRoutes from "./routes/setup.routes.js";
+import setupPermisosRoutes from "./routes/setup-permisos.routes.js";
 
 // ============================================
 // RUTAS PENDIENTES DE MIGRAR ⏳
@@ -47,6 +48,7 @@ app.use("/api", formulariosRoutes);
 app.use("/api", permisosRoutes);
 app.use("/api", usuariosRoutes);
 app.use("/api", setupRoutes);
+app.use("/api", setupPermisosRoutes);
 
 // ============================================
 // RUTAS COMENTADAS (PENDIENTES DE MIGRACIÓN) ⏳
