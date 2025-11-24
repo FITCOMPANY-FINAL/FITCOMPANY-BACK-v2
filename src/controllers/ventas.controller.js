@@ -158,10 +158,6 @@ export const listarVentas = async (req, res) => {
         "v.es_fiado",
         "v.saldo_pendiente",
         "v.observaciones",
-        "v.activo",
-        "v.eliminado_en",
-        "v.eliminado_por",
-        "v.motivo_eliminacion",
         "v.creado_en",
         db.raw(
           `CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario, ' ', COALESCE(u.apellido2_usuario, '')) as usuario`,
@@ -171,13 +167,7 @@ export const listarVentas = async (req, res) => {
         "u.identificacion_usuario",
       );
 
-    // Filtrar por activo/eliminado según query param
-    if (incluir_eliminadas !== "true") {
-      query = query.where("v.activo", true);
-    }
-
     const ventas = await query
-      .orderBy("v.activo", "desc") // Activas primero
       .orderBy("v.fecha_venta", "desc")
       .orderBy("v.id_venta", "desc");
 
@@ -886,11 +876,8 @@ export const eliminarVenta = async (req, res) => {
 
   try {
     await db.transaction(async (trx) => {
-      // PASO 1: Verificar que la venta existe y está activa
-      const venta = await trx("ventas")
-        .where("id_venta", id)
-        .where("activo", true)
-        .first();
+      // PASO 1: Verificar que la venta existe
+      const venta = await trx("ventas").where("id_venta", id).first();
 
       if (!venta) {
         throw new Error("VENTA_NO_ENCONTRADA");
@@ -924,23 +911,11 @@ export const eliminarVenta = async (req, res) => {
           .update({ stock_actual: nuevoStock });
       }
 
-      // PASO 4: SOFT DELETE - Marcar como inactiva en lugar de eliminar
-      await trx("ventas")
-        .where("id_venta", id)
-        .update({
-          activo: false,
-          eliminado_en: trx.fn.now(),
-          eliminado_por: `${authUser.tipo_id}-${authUser.identificacion}`,
-          motivo_eliminacion: motivoFinal,
-        });
+      // PASO 4: Eliminar la venta y sus detalles/pagos asociados (CASCADE)
+      await trx("ventas").where("id_venta", id).del();
     });
 
-    console.log(
-      `✅ Venta ${id} marcada como eliminada (soft delete) y stock revertido`,
-    );
-    console.log(
-      `   Eliminada por: ${authUser.tipo_id}-${authUser.identificacion}`,
-    );
+    console.log(`✅ Venta ${id} eliminada y stock revertido`);
 
     res.json({
       message: "Venta eliminada correctamente y stock revertido.",
