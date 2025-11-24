@@ -7,7 +7,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "nodemon src/app.js",
     "schema:init": "node ejecutar-schema.js",
-    "migrate": "node ejecutar-migraciones.js"
+    "migrate": "node ejecutar-migraciones.js",
+    "db:setup": "node ejecutar-schema.js && node ejecutar-migraciones.js"
   },
   "keywords": [],
   "author": "",
