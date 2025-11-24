@@ -19,125 +19,117 @@ export const cleanAndSetup = async (req, res) => {
     console.log("\n📋 Creando formularios con estructura jerárquica...");
 
     const formularios = [
-      // Dashboard (sin padre)
-      { titulo: "Dashboard", url: "/dashboard", es_padre: false, orden: 1 },
-
-      // Operaciones (PADRE)
-      { titulo: "Operaciones", url: "/operaciones", es_padre: true, orden: 2 },
+      // Seguridad (PADRE) - orden 1
+      { titulo: "Seguridad", url: null, es_padre: true, orden: 1 },
       {
-        titulo: "Ventas",
-        url: "/ventas",
+        titulo: "Formularios",
+        url: "/dashboard/formularios",
         es_padre: false,
-        orden: 3,
-        padre: "Operaciones",
+        orden: 1,
+        padre: "Seguridad",
       },
       {
-        titulo: "Compras",
-        url: "/compras",
+        titulo: "Permisos",
+        url: "/dashboard/permisos",
         es_padre: false,
-        orden: 4,
-        padre: "Operaciones",
-      },
-      {
-        titulo: "Métodos de Pago",
-        url: "/metodos-pago",
-        es_padre: false,
-        orden: 5,
-        padre: "Operaciones",
+        orden: 2,
+        padre: "Seguridad",
       },
 
-      // Inventario (PADRE)
-      { titulo: "Inventario", url: "/inventario", es_padre: true, orden: 6 },
+      // Inventario (PADRE) - orden 2
+      { titulo: "Inventario", url: null, es_padre: true, orden: 2 },
       {
         titulo: "Categorías",
-        url: "/categorias",
+        url: "/dashboard/categorias",
         es_padre: false,
-        orden: 7,
-        padre: "Inventario",
-      },
-      {
-        titulo: "Productos",
-        url: "/productos",
-        es_padre: false,
-        orden: 8,
+        orden: 1,
         padre: "Inventario",
       },
       {
         titulo: "Unidades de Medida",
-        url: "/unidades-medidas",
+        url: "/dashboard/unidades-medidas",
         es_padre: false,
-        orden: 9,
+        orden: 2,
+        padre: "Inventario",
+      },
+      {
+        titulo: "Productos",
+        url: "/dashboard/productos",
+        es_padre: false,
+        orden: 3,
         padre: "Inventario",
       },
 
-      // Administración (PADRE)
+      // Operaciones (PADRE) - orden 3
+      { titulo: "Operaciones", url: null, es_padre: true, orden: 3 },
       {
-        titulo: "Administración",
-        url: "/administracion",
-        es_padre: true,
-        orden: 10,
+        titulo: "Compras",
+        url: "/dashboard/compras",
+        es_padre: false,
+        orden: 1,
+        padre: "Operaciones",
       },
       {
-        titulo: "Tipos de Identificación",
-        url: "/tipos-identificacion",
+        titulo: "Ventas",
+        url: "/dashboard/ventas",
         es_padre: false,
-        orden: 11,
-        padre: "Administración",
+        orden: 2,
+        padre: "Operaciones",
       },
       {
-        titulo: "Roles",
-        url: "/roles",
+        titulo: "Métodos de Pago",
+        url: "/dashboard/metodos-pago",
         es_padre: false,
-        orden: 12,
-        padre: "Administración",
-      },
-      {
-        titulo: "Usuarios",
-        url: "/usuarios",
-        es_padre: false,
-        orden: 13,
-        padre: "Administración",
-      },
-      {
-        titulo: "Formularios",
-        url: "/formularios",
-        es_padre: false,
-        orden: 14,
-        padre: "Administración",
+        orden: 3,
+        padre: "Operaciones",
       },
 
-      // Seguridad (PADRE)
-      { titulo: "Seguridad", url: "/seguridad", es_padre: true, orden: 15 },
-      {
-        titulo: "Permisos",
-        url: "/permisos",
-        es_padre: false,
-        orden: 16,
-        padre: "Seguridad",
-      },
-
-      // Reportes (PADRE)
-      { titulo: "Reportes", url: "/reportes", es_padre: true, orden: 17 },
+      // Reportes (PADRE) - orden 4
+      { titulo: "Reportes", url: null, es_padre: true, orden: 4 },
       {
         titulo: "Reporte de Ventas",
-        url: "/reportes/ventas",
+        url: "/dashboard/reportes/ventas",
         es_padre: false,
-        orden: 18,
+        orden: 1,
         padre: "Reportes",
       },
       {
         titulo: "Reporte de Compras",
-        url: "/reportes/compras",
+        url: "/dashboard/reportes/compras",
         es_padre: false,
-        orden: 19,
+        orden: 2,
         padre: "Reportes",
       },
       {
         titulo: "Reporte de Inventario",
-        url: "/reportes/inventario",
+        url: "/dashboard/reportes/inventario",
         es_padre: false,
-        orden: 20,
+        orden: 3,
         padre: "Reportes",
+      },
+
+      // Administración (PADRE) - orden 5
+      { titulo: "Administración", url: null, es_padre: true, orden: 5 },
+      {
+        titulo: "Roles",
+        url: "/dashboard/roles",
+        es_padre: false,
+        orden: 1,
+        padre: "Administración",
+      },
+      {
+        titulo: "Usuarios",
+        url: "/dashboard/usuarios",
+        es_padre: false,
+        orden: 2,
+        padre: "Administración",
+      },
+      {
+        titulo: "Tipos de Identificación",
+        url: "/dashboard/tipos-identificaciones",
+        es_padre: false,
+        orden: 3,
+        padre: "Administración",
       },
     ];
 
