@@ -110,10 +110,10 @@ export const reporteVentas = async (req, res) => {
         // Total pagado: contado = total, fiado = total - saldo_pendiente
         db.raw(`
           COALESCE(
-            SUM(CASE 
-              WHEN es_fiado = false THEN total 
-              ELSE (total - saldo_pendiente) 
-            END), 
+            SUM(CASE
+              WHEN es_fiado = false THEN total
+              ELSE (total - saldo_pendiente)
+            END),
             0
           ) as total_pagado
         `),
@@ -132,7 +132,7 @@ export const reporteVentas = async (req, res) => {
         // Total fiado: usa total - saldo_pendiente (lo que realmente se pagó)
         db.raw(`
           COALESCE(
-            SUM(CASE WHEN es_fiado = true THEN (total - saldo_pendiente) ELSE 0 END), 
+            SUM(CASE WHEN es_fiado = true THEN (total - saldo_pendiente) ELSE 0 END),
             0
           ) as total_fiado
         `),
@@ -149,10 +149,10 @@ export const reporteVentas = async (req, res) => {
         db.raw("COUNT(*) as cantidad"),
         db.raw(`
           COALESCE(
-            SUM(CASE 
-              WHEN es_fiado = false THEN total 
-              ELSE (total - saldo_pendiente) 
-            END), 
+            SUM(CASE
+              WHEN es_fiado = false THEN total
+              ELSE (total - saldo_pendiente)
+            END),
             0
           ) as total
         `),
@@ -167,9 +167,9 @@ export const reporteVentas = async (req, res) => {
     );
     const ventasPorDiaCompleto = todasLasFechas.map((fecha) => {
       // Normalizar formato de fecha para comparación
-      const fechaNormalizada = fecha.split('T')[0];
+      const fechaNormalizada = fecha.split("T")[0];
       const ventaDelDia = ventasPorDia.find((v) => {
-        const fechaVenta = v.fecha ? v.fecha.split('T')[0] : null;
+        const fechaVenta = v.fecha ? v.fecha.split("T")[0] : null;
         return fechaVenta === fechaNormalizada;
       });
       return {
@@ -213,10 +213,10 @@ export const reporteVentas = async (req, res) => {
         db.raw("COUNT(v.id_venta) as cantidad_ventas"),
         db.raw(`
           COALESCE(
-            SUM(CASE 
-              WHEN v.es_fiado = false THEN v.total 
-              ELSE (v.total - v.saldo_pendiente) 
-            END), 
+            SUM(CASE
+              WHEN v.es_fiado = false THEN v.total
+              ELSE (v.total - v.saldo_pendiente)
+            END),
             0
           ) as total_vendido
         `),
@@ -237,7 +237,6 @@ export const reporteVentas = async (req, res) => {
       .where("v.saldo_pendiente", ">", 0)
       .select(
         "v.id_venta",
-        "v.folio",
         "v.fecha_venta",
         "v.total",
         "v.saldo_pendiente",
@@ -282,11 +281,13 @@ export const reporteVentas = async (req, res) => {
         total: Number(v.total_vendido),
       })),
       cartera: {
-        total_por_cobrar: cartera.reduce((sum, v) => sum + Number(v.saldo_pendiente), 0),
+        total_por_cobrar: cartera.reduce(
+          (sum, v) => sum + Number(v.saldo_pendiente),
+          0,
+        ),
         cantidad_ventas_pendientes: cartera.length,
         ventas_pendientes: cartera.map((v) => ({
           id_venta: v.id_venta,
-          folio: v.folio,
           fecha: v.fecha_venta,
           total: Number(v.total),
           pagado: Number(v.pagado),
@@ -315,10 +316,10 @@ export const reporteCompras = async (req, res) => {
 
     // RESUMEN GENERAL
     const resumen = await db("compras")
-      .whereRaw("DATE(fecha_compra) >= DATE(?) AND DATE(fecha_compra) <= DATE(?)", [
-        rango.inicio_format,
-        rango.fin_format,
-      ])
+      .whereRaw(
+        "DATE(fecha_compra) >= DATE(?) AND DATE(fecha_compra) <= DATE(?)",
+        [rango.inicio_format, rango.fin_format],
+      )
       .select(
         db.raw("COUNT(*) as cantidad_compras"),
         db.raw("COALESCE(SUM(total), 0) as total_compras"),
@@ -328,10 +329,10 @@ export const reporteCompras = async (req, res) => {
 
     // COMPRAS POR DÍA
     const comprasPorDia = await db("compras")
-      .whereRaw("DATE(fecha_compra) >= DATE(?) AND DATE(fecha_compra) <= DATE(?)", [
-        rango.inicio_format,
-        rango.fin_format,
-      ])
+      .whereRaw(
+        "DATE(fecha_compra) >= DATE(?) AND DATE(fecha_compra) <= DATE(?)",
+        [rango.inicio_format, rango.fin_format],
+      )
       .select(
         db.raw("DATE(fecha_compra)::text as fecha"),
         db.raw("COUNT(*) as cantidad"),
@@ -347,9 +348,9 @@ export const reporteCompras = async (req, res) => {
     );
     const comprasPorDiaCompleto = todasLasFechas.map((fecha) => {
       // Normalizar formato de fecha para comparación
-      const fechaNormalizada = fecha.split('T')[0];
+      const fechaNormalizada = fecha.split("T")[0];
       const compraDelDia = comprasPorDia.find((c) => {
-        const fechaCompra = c.fecha ? c.fecha.split('T')[0] : null;
+        const fechaCompra = c.fecha ? c.fecha.split("T")[0] : null;
         return fechaCompra === fechaNormalizada;
       });
       return {
@@ -363,10 +364,10 @@ export const reporteCompras = async (req, res) => {
     const productosMasComprados = await db("detalle_compra as dc")
       .join("productos as p", "dc.id_producto", "p.id_producto")
       .join("compras as c", "dc.id_compra", "c.id_compra")
-      .whereRaw("DATE(c.fecha_compra) >= DATE(?) AND DATE(c.fecha_compra) <= DATE(?)", [
-        rango.inicio_format,
-        rango.fin_format,
-      ])
+      .whereRaw(
+        "DATE(c.fecha_compra) >= DATE(?) AND DATE(c.fecha_compra) <= DATE(?)",
+        [rango.inicio_format, rango.fin_format],
+      )
       .select(
         "p.id_producto",
         "p.nombre_producto",
@@ -385,10 +386,10 @@ export const reporteCompras = async (req, res) => {
           "u.id_tipo_identificacion",
         ).andOn("c.identificacion_usuario", "u.identificacion_usuario");
       })
-      .whereRaw("DATE(c.fecha_compra) >= DATE(?) AND DATE(c.fecha_compra) <= DATE(?)", [
-        rango.inicio_format,
-        rango.fin_format,
-      ])
+      .whereRaw(
+        "DATE(c.fecha_compra) >= DATE(?) AND DATE(c.fecha_compra) <= DATE(?)",
+        [rango.inicio_format, rango.fin_format],
+      )
       .select(
         db.raw(
           "CONCAT(u.nombres_usuario, ' ', u.apellido1_usuario) as nombre_usuario",
@@ -441,8 +442,24 @@ export const dashboard = async (req, res) => {
     const ahora = new Date();
 
     // Rango de hoy (corregido para evitar mutación)
-    const hoyInicio = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), 0, 0, 0, 0).toISOString();
-    const hoyFin = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), 23, 59, 59, 999).toISOString();
+    const hoyInicio = new Date(
+      ahora.getFullYear(),
+      ahora.getMonth(),
+      ahora.getDate(),
+      0,
+      0,
+      0,
+      0,
+    ).toISOString();
+    const hoyFin = new Date(
+      ahora.getFullYear(),
+      ahora.getMonth(),
+      ahora.getDate(),
+      23,
+      59,
+      59,
+      999,
+    ).toISOString();
 
     // Rango del mes actual
     const mesInicio = new Date(
