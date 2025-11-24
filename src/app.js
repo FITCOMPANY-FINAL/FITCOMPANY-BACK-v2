@@ -18,6 +18,7 @@ import usuariosRoutes from "./routes/usuarios.routes.js";
 import setupRoutes from "./routes/setup.routes.js";
 import setupPermisosRoutes from "./routes/setup-permisos.routes.js";
 import setupFormulariosRoutes from "./routes/setup-formularios.routes.js";
+import setupCleanRoutes from "./routes/setup-clean.routes.js";
 
 // ============================================
 // RUTAS PENDIENTES DE MIGRAR ⏳
@@ -51,6 +52,7 @@ app.use("/api", usuariosRoutes);
 app.use("/api", setupRoutes);
 app.use("/api", setupPermisosRoutes);
 app.use("/api", setupFormulariosRoutes);
+app.use("/api", setupCleanRoutes);
 
 // ============================================
 // RUTAS COMENTADAS (PENDIENTES DE MIGRACIÓN) ⏳
