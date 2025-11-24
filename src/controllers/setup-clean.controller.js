@@ -105,45 +105,38 @@ export const cleanAndSetup = async (req, res) => {
         orden: 14,
         padre: "Administración",
       },
+
+      // Seguridad (PADRE)
+      { titulo: "Seguridad", url: "/seguridad", es_padre: true, orden: 15 },
       {
         titulo: "Permisos",
         url: "/permisos",
         es_padre: false,
-        orden: 15,
-        padre: "Administración",
-      },
-
-      // Seguridad (PADRE)
-      { titulo: "Seguridad", url: "/seguridad", es_padre: true, orden: 16 },
-      {
-        titulo: "Gestión de Usuarios",
-        url: "/seguridad/usuarios",
-        es_padre: false,
-        orden: 17,
+        orden: 16,
         padre: "Seguridad",
       },
 
       // Reportes (PADRE)
-      { titulo: "Reportes", url: "/reportes", es_padre: true, orden: 18 },
+      { titulo: "Reportes", url: "/reportes", es_padre: true, orden: 17 },
       {
         titulo: "Reporte de Ventas",
         url: "/reportes/ventas",
         es_padre: false,
-        orden: 19,
+        orden: 18,
         padre: "Reportes",
       },
       {
         titulo: "Reporte de Compras",
         url: "/reportes/compras",
         es_padre: false,
-        orden: 20,
+        orden: 19,
         padre: "Reportes",
       },
       {
         titulo: "Reporte de Inventario",
         url: "/reportes/inventario",
         es_padre: false,
-        orden: 21,
+        orden: 20,
         padre: "Reportes",
       },
     ];
