@@ -151,7 +151,6 @@ export const listarVentas = async (req, res) => {
       )
       .select(
         "v.id_venta",
-        "v.folio",
         "v.fecha_venta as fecha",
         "v.total",
         "v.cliente_desc",
@@ -455,17 +454,6 @@ export const crearVenta = async (req, res) => {
           observaciones: payload.observaciones || null,
         })
         .returning("*");
-
-      // PASO 6.1: Generar folio automáticamente
-      const fechaVenta = new Date(nuevaVenta.fecha_venta);
-      const year = fechaVenta.getFullYear();
-      const folio = `VTA-${year}-${String(nuevaVenta.id_venta).padStart(5, "0")}`;
-
-      await trx("ventas")
-        .where("id_venta", nuevaVenta.id_venta)
-        .update({ folio });
-
-      nuevaVenta.folio = folio;
 
       // PASO 7: Crear detalles de venta
       const detallesCreados = [];
@@ -790,7 +778,6 @@ export const obtenerAbonosVenta = async (req, res) => {
       abonos,
       venta: {
         id_venta: venta.id_venta,
-        folio: venta.folio,
         es_fiado: venta.es_fiado,
         total: venta.total,
         saldo_pendiente: venta.saldo_pendiente,
